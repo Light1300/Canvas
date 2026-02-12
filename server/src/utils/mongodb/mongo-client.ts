@@ -10,47 +10,42 @@ const options = {
     version: ServerApiVersion.v1,
     deprecationErrors: true,
   },
-  maxPoolSize: parseInt(process.env.MONGODB_MAX_POOL_SIZE || '10', 10),
-  minPoolSize: parseInt(process.env.MONGODB_MIN_POOL_SIZE || '5', 10),
-  maxIdleTimeMS: parseInt(process.env.MONGODB_MAX_IDLE_TIME_MS || '60000', 10),
-  connectTimeoutMS: parseInt(process.env.MONGODB_CONNECT_TIMEOUT_MS || '10000', 10),
-  socketTimeoutMS: parseInt(process.env.MONGODB_SOCKET_TIMEOUT_MS || '45000', 10),
+  maxPoolSize: parseInt(process.env.MONGODB_MAX_POOL_SIZE || "10", 10),
+  minPoolSize: parseInt(process.env.MONGODB_MIN_POOL_SIZE || "5", 10),
+  maxIdleTimeMS: parseInt(process.env.MONGODB_MAX_IDLE_TIME_MS || "60000", 10),
+  connectTimeoutMS: parseInt(process.env.MONGODB_CONNECT_TIMEOUT_MS || "10000", 10),
+  socketTimeoutMS: parseInt(process.env.MONGODB_SOCKET_TIMEOUT_MS || "45000", 10),
 };
 
-let client : any = null;
-let isConnecting: boolean = false;
-let connectionPromise : any = null;
+let client: MongoClient | null = null;
+let connectionPromise: Promise<MongoClient> | null = null;
 
-
-export const connectDB = async () => {
-    try {
-    // If we already have a connected client, return it
-    if (client && client.topology && client.topology.isConnected()) {
+export const connectDB = async (): Promise<MongoClient> => {
+  try {
+    // If client already exists, reuse it
+    if (client) {
       return client;
     }
 
-    // If we're in the process of connecting, wait for that connection
-    if (isConnecting) {
+    // If connection is already in progress, wait for it
+    if (connectionPromise) {
       return connectionPromise;
     }
 
-    // Start a new connection
-    isConnecting = true;
+    // Create new connection
     connectionPromise = new Promise(async (resolve, reject) => {
       try {
-        client = new MongoClient(uri, options);
-        await client.connect();
-        console.log("MongoDB connection pool established with config:", {
+        const newClient = new MongoClient(uri, options);
+        await newClient.connect();
+
+        console.log("MongoDB connected with pool config:", {
           maxPoolSize: options.maxPoolSize,
           minPoolSize: options.minPoolSize,
-          maxIdleTimeMS: options.maxIdleTimeMS,
-          connectTimeoutMS: options.connectTimeoutMS,
-          socketTimeoutMS: options.socketTimeoutMS
         });
-        isConnecting = false;
-        resolve(client);
+
+        client = newClient;
+        resolve(newClient);
       } catch (error) {
-        isConnecting = false;
         console.error("MongoDB connection error:", error);
         reject(error);
       }
@@ -58,35 +53,31 @@ export const connectDB = async () => {
 
     return connectionPromise;
   } catch (error) {
-    throw new Error(`Error in creating MongoDB client: ${error}`);
+    throw new Error(`Error creating MongoDB client: ${error}`);
   }
 };
 
-
 // Graceful shutdown
-const closeConnection = async () => {
+export const closeConnection = async (): Promise<void> => {
   if (client) {
     try {
       await client.close();
       console.log("MongoDB connection closed");
+      client = null;
+      connectionPromise = null;
     } catch (error) {
       console.error("Error closing MongoDB connection:", error);
     }
   }
 };
 
-// Handle application shutdown
-process.on('SIGINT', async () => {
+// Handle shutdown
+process.on("SIGINT", async () => {
   await closeConnection();
   process.exit(0);
 });
 
-process.on('SIGTERM', async () => {
+process.on("SIGTERM", async () => {
   await closeConnection();
   process.exit(0);
 });
-
-module.exports = {
-  connectDB,
-  closeConnection
-};
