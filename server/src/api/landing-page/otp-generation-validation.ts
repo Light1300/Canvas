@@ -19,6 +19,7 @@ const getKey = (email: string): string => {
 export const generateAndSendOtp = async (email: string): Promise<void> => {
   const rateKey = `${RATE_LIMIT_PREFIX}:${email}`;
   const requestCount = await redis.incr(rateKey);
+  console.log("LOG AT OTP-generation-validation:::", email);
 
   if (requestCount === 1) {
     await redis.expire(rateKey, RATE_LIMIT_TTL);
@@ -29,7 +30,8 @@ export const generateAndSendOtp = async (email: string): Promise<void> => {
   }
 
   const otp = generateOtp();
-
+  console.log("OTP IS HERE  ::: ", otp);
+  
   await redis.set(getKey(email), otp, "EX", OTP_TTL_SECONDS);
 
   await sendVerificationEmail(email, otp);

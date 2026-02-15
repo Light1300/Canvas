@@ -14,8 +14,12 @@ generalRouter.post("/signin", async (req, res) => {
 });
 
 generalRouter.post("/verify-otp", async (req, res) => {
-    const response = await verifyOtp({ body: JSON.stringify(req.body) });
-    res.status(response.statusCode).json(JSON.parse(response.body));
+  const response = await verifyOtp({
+    body: JSON.stringify(req.body),
+    headers: req.headers
+  });
+
+  res.status(response.statusCode).json(JSON.parse(response.body));
 });
 
 export default generalRouter;

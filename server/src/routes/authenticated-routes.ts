@@ -1,6 +1,59 @@
 import express from "express";
+import { verifyAccessToken } from "../utils/auth/jwt.js";
 
-const router = express.Router();
+const authenticatedRouter = express.Router();
+authenticatedRouter.use((req, res, next) => {
+  const authHeader = req.headers.authorization;
 
+  if (!authHeader) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized"
+    });
+  }
 
-module.exports =  router;
+  const parts = authHeader.split(" ");
+  const [, token] = parts;
+
+  if (parts.length !== 2 || parts[0] !== "Bearer") {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized"
+    });
+  }
+
+  try {
+    //@ts-ignore
+    const decoded = verifyAccessToken(token);
+    (req as any).user = decoded;
+    next();
+  } catch {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired token"
+    });
+  }
+});
+
+authenticatedRouter.get("/health", (_req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Authenticated route working"
+  });
+});
+
+authenticatedRouter.get("/me", (req, res) => {
+  res.status(200).json({
+    success: true,
+    user: (req as any).user
+  });
+});
+
+authenticatedRouter.post("/logout", (_req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Logged out successfully"
+  });
+});
+
+export default authenticatedRouter;
