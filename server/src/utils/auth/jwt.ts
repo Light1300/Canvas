@@ -24,8 +24,17 @@ export const generateRefreshToken = (userId: string) => {
   );
 };
 
+export const verifyAccessToken = (token: string) => {
+  return jwt.verify(token, ACCESS_SECRET) as {
+    userId: string;
+    email: string;
+  };
+};
+
 export const verifyRefreshToken = (token: string) => {
-  return jwt.verify(token, REFRESH_SECRET) as { userId: string };
+  return jwt.verify(token, REFRESH_SECRET) as {
+    userId: string;
+  };
 };
 
 export const hashToken = (token: string) => {

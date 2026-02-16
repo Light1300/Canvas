@@ -4,8 +4,8 @@ import { signup, signin, verifyOtp } from "../api/landing-page/signin-signup.js"
 const generalRouter = express.Router();
 
 generalRouter.post("/signup", async (req, res) => {
-    const response = await signup({ body: JSON.stringify(req.body) });
-    res.status(response.statusCode).json(JSON.parse(response.body));
+  const response = await signup({ body: JSON.stringify(req.body) });
+  res.status(response.statusCode).json(JSON.parse(response.body));
 });
 
 generalRouter.post("/signin", async (req, res) => {

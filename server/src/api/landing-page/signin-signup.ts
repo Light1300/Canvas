@@ -3,9 +3,9 @@ import { connectDB } from "../../utils/mongodb/mongo-client.js";
 import { generateAndSendOtp, validateOtp } from "./otp-generation-validation.js";
 import { generateVerificationToken, verifyVerificationToken } from "./verify-token.js";
 import { generateAccessToken, generateRefreshToken, hashToken } from "../../utils/auth/jwt.js";
+import   { ApiResponse }   from "../../types/api-response.js";
 
-
-export const signup = async (event: any) => {
+export const signup = async (event: any) :Promise<ApiResponse> => {
   try {
     const { name, email, password } = JSON.parse(event.body);
     console.log("Event at signin-signup ", JSON.parse(event.body));
@@ -73,7 +73,7 @@ export const signup = async (event: any) => {
     }
 }
 
-export const verifyOtp = async (event: any) => {
+export const verifyOtp = async (event: any) : Promise<ApiResponse> => {
   try {
     console.log("VERIFY-OTP REQUEST RECEIVED");
 
@@ -89,9 +89,9 @@ export const verifyOtp = async (event: any) => {
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       console.log("Verification token missing or malformed");
       return {
-        success: false,
         statusCode: 401,
-        body: JSON.stringify({ message: "Verification token missing." })
+        body: JSON.stringify({ message: "Verification token missing." }),
+        success: false,
       };
     }
 
@@ -116,7 +116,9 @@ export const verifyOtp = async (event: any) => {
     }
 
     const mongoClient = await connectDB();
-    const users = mongoClient.db().collection("users");
+    const db = mongoClient.db();
+      
+    const users = db.collection("users");
 
     await users.updateOne(
       { email },
@@ -130,9 +132,9 @@ export const verifyOtp = async (event: any) => {
 
     if(!user){
       return {
+        statusCode: 404,
+        body:JSON.stringify({message: "User not found"}),
         success: false,
-        statucCode: 404,
-        message: "User not found",
       }
     }
 
@@ -140,13 +142,12 @@ export const verifyOtp = async (event: any) => {
     const refreshToken = generateRefreshToken(user._id.toString());
 
     const hashedRefresh = hashToken(refreshToken);
-
-     await db.collection("refreshTokens").insertOne({
+    
+    await db.collection("refreshTokens").insertOne({
       userId: user._id,
       token: hashedRefresh,
       createdAt: new Date()
     });
-
 
     return {
       success: true,
@@ -154,7 +155,8 @@ export const verifyOtp = async (event: any) => {
       body: JSON.stringify({
          message: "Account verified successfully.",
          accessToken,
-         refreshToken })
+         refreshToken,
+         })
     };
 
   } catch (error) {
@@ -181,7 +183,9 @@ export const signin = async (event: any) => {
     }
 
     const mongoClient = await connectDB();
-    const users = mongoClient.db().collection("users");
+    const db = mongoClient.db();
+      
+    const users = db.collection("users");
 
     
     const user = await users.findOne({ email });
@@ -212,10 +216,23 @@ export const signin = async (event: any) => {
       };
     }
 
+    const accessToken = generateAccessToken(user._id.toString(), email);
+    const refreshToken = generateRefreshToken(user._id.toString());
+
+    await db.collection("refreshTokens").insertOne({
+      userId: user._id,
+      token: hashToken(refreshToken),
+      createdAt: new Date()
+    });
+
     return {
       success: true,
       statusCode: 200,
-      body: JSON.stringify({ message: "Signed in successfully." })
+      body: JSON.stringify({
+        message: "Signed in successfully.",
+        accessToken,
+        refreshToken
+      })
     };
 
   } catch {

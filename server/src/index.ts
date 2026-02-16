@@ -5,6 +5,7 @@ import { connectDB } from "./utils/mongodb/mongo-client.js";
 import generalRouter from "./routes/general-routes.js";
 import  authenticatedRouter  from "./routes/authenticated-routes.js";
 
+
 dotenv.config();
 
 const app = express();
