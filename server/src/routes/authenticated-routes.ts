@@ -1,7 +1,11 @@
-import express from "express";
+import { Router } from "express";
+import { createRoomController, validateRoomController } from "../modules/rooms/room.controller.js";
 import { verifyAccessToken } from "../utils/auth/jwt.js";
+import { createRoomService } from "../modules/rooms/room.service.js";
 
-const authenticatedRouter = express.Router();
+
+
+const authenticatedRouter = Router();
 authenticatedRouter.use((req, res, next) => {
   const authHeader = req.headers.authorization;
 
@@ -34,6 +38,10 @@ authenticatedRouter.use((req, res, next) => {
     });
   }
 });
+
+authenticatedRouter.post("/rooms", createRoomController);
+authenticatedRouter.get("/rooms/:roomId", validateRoomController);
+
 
 authenticatedRouter.get("/health", (_req, res) => {
   res.status(200).json({
