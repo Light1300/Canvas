@@ -7,6 +7,7 @@ import { connectDB } from "./utils/mongodb/mongo-client.js";
 import generalRouter from "./routes/general-routes.js";
 import authenticatedRouter from "./routes/authenticated-routes.js";
 import { initWebSocketServer } from "./websocket/socket.server.js";
+import { connectMongo } from "./modules/rooms/room.schema.js";
 
 dotenv.config();
 
@@ -28,6 +29,7 @@ app.use("/api/user", authenticatedRouter);
 const startServer = async () => {
   try {
     await connectDB();
+    await connectMongo();
 
     const server = http.createServer(app);
 
