@@ -1,5 +1,6 @@
 import { Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
+import type { ExtendedWebSocket } from "./socket.types.js";
 import { randomUUID } from "crypto";
 import { validateRoomService } from "../modules/rooms/room.service.js";
 import { redisPublisher, redisSubscriber } from "../utils/redis/redisClient.js";
@@ -9,9 +10,10 @@ import {
   SocketMessage,
   SocketEvent
 } from "./socket.types.js";
+import { createSocketRouter } from "./ws.router.js";
 import { RoomModel } from "../modules/rooms/room.schema.js";
 
-const rooms = new Map<string, Set<WebSocket>>();
+const rooms = new Map<string, Set<ExtendedWebSocket>>();
 
 const broadcast = (roomId: string, message: SocketMessage) => {
   const clients = rooms.get(roomId);
@@ -26,10 +28,11 @@ const broadcast = (roomId: string, message: SocketMessage) => {
 
 export const initWebSocketServer = (server: Server) => {
   const wss = new WebSocketServer({ server });
-
+  const { handleMessage } = createSocketRouter({ rooms });
+  // Redis PubSub listener
   redisSubscriber.pSubscribe("room:*", (message: string, channel: string) => {
     const roomId = channel.split(":")[1];
-    const parsed: SocketMessage = JSON.parse(message);
+    const parsed = JSON.parse(message) as SocketMessage;
     //@ts-ignore
     broadcast(roomId, parsed);
   });
@@ -66,17 +69,27 @@ export const initWebSocketServer = (server: Server) => {
     }
   }, 30000);
 
+  // Heartbeat
   wss.on("connection", (ws: WebSocket) => {
+    const socket = ws as ExtendedWebSocket;
+    socket.isAlive = true;
+
+    socket.on("pong", () => {
+      socket.isAlive = true;
+    });
+
     const connectionId = randomUUID();
     let currentRoom: string | null = null;
 
-    ws.on("message", async (data: Buffer) => {
+    socket.on("message", async (data: Buffer) => {
+      await handleMessage(socket, data);
+
       let message: SocketMessage;
 
       try {
         message = JSON.parse(data.toString());
       } catch {
-        ws.close();
+        socket.close();
         return;
       }
 
@@ -85,7 +98,7 @@ export const initWebSocketServer = (server: Server) => {
 
         const isValid = await validateRoomService(roomId);
         if (!isValid) {
-          ws.close();
+          socket.close();
           return;
         }
 
@@ -93,7 +106,7 @@ export const initWebSocketServer = (server: Server) => {
           rooms.set(roomId, new Set());
         }
 
-        rooms.get(roomId)!.add(ws);
+        rooms.get(roomId)!.add(socket);
         currentRoom = roomId;
 
         await redisPublisher.sAdd(
@@ -132,10 +145,10 @@ export const initWebSocketServer = (server: Server) => {
       }
     });
 
-    ws.on("close", async () => {
+    socket.on("close", async () => {
       if (!currentRoom) return;
 
-      rooms.get(currentRoom)?.delete(ws);
+      rooms.get(currentRoom)?.delete(socket);
 
       await redisPublisher.sRem(
         `room:users:${currentRoom}`,
@@ -166,5 +179,24 @@ export const initWebSocketServer = (server: Server) => {
         rooms.delete(currentRoom);
       }
     });
+  });
+
+  // Global heartbeat interval
+  const interval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      const socket = ws as unknown as ExtendedWebSocket;
+
+      if (!socket.isAlive) {
+        socket.terminate();
+        return;
+      }
+
+      socket.isAlive = false;
+      socket.ping();
+    });
+  }, 30000);
+
+  wss.on("close", () => {
+    clearInterval(interval);
   });
 };
