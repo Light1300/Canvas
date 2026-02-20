@@ -1,22 +1,14 @@
-import { create } from "zustand";
-
 export type ConnectionStatus =
   | "idle"
   | "connecting"
   | "connected"
-  | "disconnected"
-  | "error";
+  | "disconnected";
 
-interface RoomState {
+// Simple store without zustand to avoid the missing dep error.
+// State is managed via useRoomSocket hook directly.
+// Keep this file as a shared type export only.
+
+export interface RoomState {
   userCount: number;
   connectionStatus: ConnectionStatus;
-  setUserCount: (count: number) => void;
-  setConnectionStatus: (status: ConnectionStatus) => void;
 }
-
-export const useRoomStore = create<RoomState>((set) => ({
-  userCount: 0,
-  connectionStatus: "idle",
-  setUserCount: (count) => set({ userCount: count }),
-  setConnectionStatus: (status) => set({ connectionStatus: status }),
-}));

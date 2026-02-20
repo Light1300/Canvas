@@ -1,5 +1,11 @@
 import { useRef, useEffect, useCallback } from "react";
-import { Stroke } from "./canvas.types";
+
+export interface Stroke {
+  roomId: string;
+  points: { x: number; y: number }[];
+  color: string;
+  width: number;
+}
 
 interface Props {
   roomId: string;
@@ -15,20 +21,27 @@ export default function Canvas({ roomId, sendStroke }: Props) {
   const color = "#ffffff";
   const lineWidth = 2;
 
+  // Setup canvas
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const resize = () => {
       const parent = canvas.parentElement!;
-      const snapshot = ctxRef.current?.getImageData(0, 0, canvas.width, canvas.height);
+      const imageData = ctxRef.current?.getImageData(0, 0, canvas.width, canvas.height);
       canvas.width = parent.clientWidth;
       canvas.height = parent.clientHeight;
+
       const ctx = canvas.getContext("2d")!;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
       ctxRef.current = ctx;
-      if (snapshot) ctx.putImageData(snapshot, 0, 0);
+
+      if (imageData) {
+        ctx.putImageData(imageData, 0, 0);
+      }
     };
 
     resize();
@@ -40,15 +53,22 @@ export default function Canvas({ roomId, sendStroke }: Props) {
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
     if ("touches" in e) {
-      return { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
+      return {
+        x: e.touches[0].clientX - rect.left,
+        y: e.touches[0].clientY - rect.top,
+      };
     }
-    return { x: (e as React.MouseEvent).clientX - rect.left, y: (e as React.MouseEvent).clientY - rect.top };
+    return {
+      x: (e as React.MouseEvent).clientX - rect.left,
+      y: (e as React.MouseEvent).clientY - rect.top,
+    };
   };
 
   const startDrawing = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     isDrawing.current = true;
     const pos = getPos(e);
     currentPoints.current = [pos];
+
     const ctx = ctxRef.current!;
     ctx.beginPath();
     ctx.moveTo(pos.x, pos.y);
@@ -58,6 +78,7 @@ export default function Canvas({ roomId, sendStroke }: Props) {
     if (!isDrawing.current) return;
     const pos = getPos(e);
     currentPoints.current.push(pos);
+
     const ctx = ctxRef.current!;
     ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
@@ -68,22 +89,32 @@ export default function Canvas({ roomId, sendStroke }: Props) {
   const stopDrawing = useCallback(() => {
     if (!isDrawing.current) return;
     isDrawing.current = false;
+
     if (currentPoints.current.length > 1) {
-      sendStroke({ roomId, points: currentPoints.current, color, width: lineWidth });
+      sendStroke({
+        roomId,
+        points: currentPoints.current,
+        color,
+        width: lineWidth,
+      });
     }
+
     currentPoints.current = [];
     ctxRef.current?.beginPath();
   }, [roomId, sendStroke, color, lineWidth]);
 
+  // Draw a received stroke from another user
   const drawExternalStroke = useCallback((stroke: Stroke) => {
     const ctx = ctxRef.current;
     if (!ctx || stroke.points.length < 2) return;
+
     ctx.beginPath();
     ctx.strokeStyle = stroke.color;
     ctx.lineWidth = stroke.width;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+
     for (let i = 1; i < stroke.points.length; i++) {
       ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
     }
@@ -91,9 +122,12 @@ export default function Canvas({ roomId, sendStroke }: Props) {
     ctx.beginPath();
   }, []);
 
+  // Expose drawExternalStroke via ref on canvas element for useRoomSocket to call
   useEffect(() => {
     const canvas = canvasRef.current as any;
-    if (canvas) canvas.__drawStroke = drawExternalStroke;
+    if (canvas) {
+      canvas.__drawStroke = drawExternalStroke;
+    }
   }, [drawExternalStroke]);
 
   return (
