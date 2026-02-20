@@ -7,7 +7,6 @@ const RATE_LIMIT_PREFIX = "otp:limit";
 const MAX_REQUESTS = 3;
 const RATE_LIMIT_TTL = 60 * 5;
 
-
 const generateOtp = (): string => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
@@ -31,12 +30,12 @@ export const generateAndSendOtp = async (email: string): Promise<void> => {
 
   const otp = generateOtp();
   console.log("OTP IS HERE  ::: ", otp);
-  
-  await redis.set(getKey(email), otp, "EX", OTP_TTL_SECONDS);
+
+  // node-redis syntax: options object instead of "EX", seconds
+  await redis.set(getKey(email), otp, { EX: OTP_TTL_SECONDS });
 
   await sendVerificationEmail(email, otp);
 };
-
 
 export const validateOtp = async (
   email: string,
