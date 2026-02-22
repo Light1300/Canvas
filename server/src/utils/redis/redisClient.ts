@@ -1,35 +1,22 @@
 import { createClient } from "redis";
 
-// One client for get/set (OTP etc), one for publish, one for subscribe
-// All using the same node-redis library — no mixing with ioredis
+const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
+
 const redis = createClient({
+  url: redisUrl,
   socket: {
-    host: process.env.REDIS_HOST || "localhost",
-    port: parseInt(process.env.REDIS_PORT || "6379"),
     reconnectStrategy: (retries) => Math.min(retries * 100, 2000),
   }
 });
 
-export const redisPublisher = createClient({
-  socket: {
-    host: process.env.REDIS_HOST || "localhost",
-    port: parseInt(process.env.REDIS_PORT || "6379"),
-  }
-});
-
-export const redisSubscriber = createClient({
-  socket: {
-    host: process.env.REDIS_HOST || "localhost",
-    port: parseInt(process.env.REDIS_PORT || "6379"),
-  }
-});
+export const redisPublisher = createClient({ url: redisUrl });
+export const redisSubscriber = createClient({ url: redisUrl });
 
 redis.on("connect", () => console.log("Redis connected"));
 redis.on("error", (err: Error) => console.error("Redis error:", err.message));
 redisPublisher.on("error", (err: Error) => console.error("Redis publisher error:", err.message));
 redisSubscriber.on("error", (err: Error) => console.error("Redis subscriber error:", err.message));
 
-// Connect all three
 Promise.all([
   redis.connect(),
   redisPublisher.connect(),
