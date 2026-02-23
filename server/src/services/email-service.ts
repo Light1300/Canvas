@@ -1,46 +1,44 @@
-import Brevo from "@getbrevo/brevo";
-
 const BREVO_API_KEY = process.env.BREVO_API_KEY as string;
+const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL as string;
+const BREVO_SENDER_NAME = "Canva Project";
 
 if (!BREVO_API_KEY) {
   throw new Error("BREVO_API_KEY is not defined");
 }
 
-const brevo = new Brevo.TransactionalEmailsApi();
-
-brevo.setApiKey(
-  Brevo.TransactionalEmailsApiApiKeys.apiKey,
-  BREVO_API_KEY
-);
-
 export async function sendVerificationEmail(
   toEmail: string,
   otp: string
 ): Promise<void> {
-  try {
-    const response = await brevo.sendTransacEmail({
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "api-key": BREVO_API_KEY,
+    },
+    body: JSON.stringify({
       sender: {
-        name: "YourApp",
-        email: "no-reply@yourdomain.com", // verify this in Brevo
+        name: BREVO_SENDER_NAME,
+        email: BREVO_SENDER_EMAIL,
       },
       to: [{ email: toEmail }],
       subject: "Your Verification Code",
       htmlContent: `
-        <div style="font-family: sans-serif;">
+        <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto;">
           <h2>Your Verification Code</h2>
           <p>Your OTP is:</p>
-          <h1>${otp}</h1>
+          <h1 style="letter-spacing: 6px; color: #4f46e5;">${otp}</h1>
           <p>This code expires in 5 minutes.</p>
         </div>
       `,
-    });
+    }),
+  });
 
-    if (!response.messageId) {
-      throw new Error("Email not accepted by Brevo");
-    }
-
-  } catch (error) {
-    console.error("Brevo email error:", error);
+  if (!response.ok) {
+    const error = await response.text();
+    console.error("Brevo API error:", error);
     throw new Error("Failed to send verification email");
   }
+
+  console.log("Email sent to:", toEmail);
 }

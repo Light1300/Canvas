@@ -4,7 +4,7 @@ const VERIFICATION_SECRET = process.env.VERIFICATION_SECRET as string;
 
 export const generateVerificationToken = (email: string): string => {
   return jwt.sign({ email }, VERIFICATION_SECRET, {
-    expiresIn: "10m"
+    expiresIn: "15m"
   });
 };
 
