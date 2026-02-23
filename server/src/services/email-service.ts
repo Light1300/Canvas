@@ -1,41 +1,46 @@
-import nodemailer from "nodemailer";
+import Brevo from "@getbrevo/brevo";
 
-const BREVO_SMTP_USER = process.env.BREVO_SMTP_USER as string;
-const BREVO_SMTP_PASS = process.env.BREVO_SMTP_PASS as string;
+const BREVO_API_KEY = process.env.BREVO_API_KEY as string;
 
-if (!BREVO_SMTP_USER || !BREVO_SMTP_PASS) {
-  throw new Error("Brevo SMTP credentials are not defined");
+if (!BREVO_API_KEY) {
+  throw new Error("BREVO_API_KEY is not defined");
 }
 
-const transporter = nodemailer.createTransport({
-  host: "smtp-relay.brevo.com",
-  port: 587,
-  secure: false,
-  auth: {
-    user: BREVO_SMTP_USER,
-    pass: BREVO_SMTP_PASS,
-  },
-});
+const brevo = new Brevo.TransactionalEmailsApi();
+
+brevo.setApiKey(
+  Brevo.TransactionalEmailsApiApiKeys.apiKey,
+  BREVO_API_KEY
+);
 
 export async function sendVerificationEmail(
   toEmail: string,
   otp: string
 ): Promise<void> {
-  const info = await transporter.sendMail({
-    from: `"YourApp" <no-reply@yourdomain.com>`,
-    to: toEmail,
-    subject: "Your Verification Code",
-    html: `
-      <div style="font-family: sans-serif;">
-        <h2>Your Verification Code</h2>
-        <p>Your OTP is:</p>
-        <h1>${otp}</h1>
-        <p>This code expires in 5 minutes.</p>
-      </div>
-    `,
-  });
+  try {
+    const response = await brevo.sendTransacEmail({
+      sender: {
+        name: "YourApp",
+        email: "no-reply@yourdomain.com", // verify this in Brevo
+      },
+      to: [{ email: toEmail }],
+      subject: "Your Verification Code",
+      htmlContent: `
+        <div style="font-family: sans-serif;">
+          <h2>Your Verification Code</h2>
+          <p>Your OTP is:</p>
+          <h1>${otp}</h1>
+          <p>This code expires in 5 minutes.</p>
+        </div>
+      `,
+    });
 
-  if (!info.messageId) {
+    if (!response.messageId) {
+      throw new Error("Email not accepted by Brevo");
+    }
+
+  } catch (error) {
+    console.error("Brevo email error:", error);
     throw new Error("Failed to send verification email");
   }
 }
