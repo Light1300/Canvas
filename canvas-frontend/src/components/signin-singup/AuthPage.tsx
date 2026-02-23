@@ -48,11 +48,15 @@ export default function AuthPage({ mode }: Props) {
         });
 
         console.log("[AuthPage] Signup success:", res.data);
-
         const { verificationToken } = res.data;
-
+              
+        // ADD THIS LINE - clear any old stale token
+        sessionStorage.clear();
+              
         sessionStorage.setItem("verificationToken", verificationToken);
         sessionStorage.setItem("email", email);
+              
+              
 
         console.log("[AuthPage] Stored verificationToken & email");
         console.log("[AuthPage] Navigating to /verify-otp");
