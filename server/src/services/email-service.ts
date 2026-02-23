@@ -1,33 +1,41 @@
 import nodemailer from "nodemailer";
 
-const EMAIL_USER = process.env.EMAIL_USER;
-const EMAIL_PASS = process.env.EMAIL_PASS;
+const BREVO_SMTP_USER = process.env.BREVO_SMTP_USER as string;
+const BREVO_SMTP_PASS = process.env.BREVO_SMTP_PASS as string;
 
-if (!EMAIL_USER || !EMAIL_PASS) {
-  throw new Error("Email credentials are not defined");
+if (!BREVO_SMTP_USER || !BREVO_SMTP_PASS) {
+  throw new Error("Brevo SMTP credentials are not defined");
 }
 
 const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
+  host: "smtp-relay.brevo.com",
   port: 587,
   secure: false,
   auth: {
-    user: EMAIL_USER,
-    pass: EMAIL_PASS
-  }
+    user: BREVO_SMTP_USER,
+    pass: BREVO_SMTP_PASS,
+  },
 });
 
 export async function sendVerificationEmail(
   toEmail: string,
   otp: string
-) {
-  await transporter.sendMail({
-    from: ` <${EMAIL_USER}>`,
+): Promise<void> {
+  const info = await transporter.sendMail({
+    from: `"YourApp" <no-reply@yourdomain.com>`,
     to: toEmail,
     subject: "Your Verification Code",
-    text: `Your verification code is: ${otp}`,
-    html: `<b>Your verification code is: ${otp}</b>`
+    html: `
+      <div style="font-family: sans-serif;">
+        <h2>Your Verification Code</h2>
+        <p>Your OTP is:</p>
+        <h1>${otp}</h1>
+        <p>This code expires in 5 minutes.</p>
+      </div>
+    `,
   });
 
-  console.log("EMAIL SENT to ::::", toEmail );
+  if (!info.messageId) {
+    throw new Error("Failed to send verification email");
+  }
 }
