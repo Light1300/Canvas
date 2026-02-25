@@ -8,18 +8,9 @@ export default function VerifyOtp() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    console.log("[VerifyOtp] Mounted");
-    console.log(
-      "[VerifyOtp] Stored email:",
-      sessionStorage.getItem("email") || "NOT FOUND"
-    );
-  }, []);
-
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    console.log("[VerifyOtp] Form submitted");
 
     if (loading) {
       console.warn("[VerifyOtp] Prevented duplicate verification request");
@@ -27,10 +18,6 @@ export default function VerifyOtp() {
     }
 
     const token = sessionStorage.getItem("verificationToken");
-    console.log(
-      "[VerifyOtp] Retrieved verification token:",
-      token ? "FOUND" : "MISSING"
-    );
 
     if (!token) {
       console.error("[VerifyOtp] Session expired - token missing");
@@ -42,30 +29,21 @@ export default function VerifyOtp() {
       setLoading(true);
       setError("");
 
-      console.log("[VerifyOtp] Sending OTP verification request", {
-        otpLength: otp.length
-      });
-
       const res = await api.post(
         "/home/verify-otp",
         { otp },
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      console.log("[VerifyOtp] OTP verification success:", res.data);
-
       const { accessToken, refreshToken } = res.data;
 
       localStorage.setItem("accessToken", accessToken);
       localStorage.setItem("refreshToken", refreshToken);
 
-      console.log("[VerifyOtp] Stored access & refresh tokens");
 
       sessionStorage.removeItem("verificationToken");
       sessionStorage.removeItem("email");
 
-      console.log("[VerifyOtp] Cleared verification session storage");
-      console.log("[VerifyOtp] Navigating to /dashboard");
 
       navigate("/dashboard");
     } catch (err: any) {
@@ -86,7 +64,6 @@ export default function VerifyOtp() {
       }
     } finally {
       setLoading(false);
-      console.log("[VerifyOtp] Loading reset");
     }
   };
 
@@ -115,7 +92,6 @@ export default function VerifyOtp() {
             value={otp}
             onChange={(e) => {
               const sanitized = e.target.value.replace(/\D/g, "");
-              console.log("[VerifyOtp] OTP updated:", sanitized);
               setOtp(sanitized);
             }}
             className="w-full p-3 border border-gray-300 rounded-lg text-center text-xl tracking-widest focus:outline-none focus:ring-2 focus:ring-indigo-400"

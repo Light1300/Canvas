@@ -1,13 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-// import { Stroke } from "../modules/room/canvas/Canvas";
 import { Stroke } from "../modules/room/canvas/canvas.types";
-
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "disconnected";
 
 const WS_URL = process.env.REACT_APP_WS_URL || "ws://localhost:8080";
 
-// Socket event constants matching backend socket.types.ts
 const SocketEvent = {
   JOIN_ROOM: "JOIN_ROOM",
   CANVAS_UPDATE: "CANVAS_UPDATE",
@@ -39,10 +36,25 @@ export function useRoomSocket(roomId: string) {
   useEffect(() => {
     if (!roomId) return;
 
-    const token = localStorage.getItem("accessToken");
-    const url = token ? `${WS_URL}?token=${token}` : WS_URL;
+    // Prevent duplicate connections (StrictMode / double mount guard)
+    if (
+      wsRef.current?.readyState === WebSocket.OPEN ||
+      wsRef.current?.readyState === WebSocket.CONNECTING
+    ) {
+      return;
+    }
 
+    const token = localStorage.getItem("accessToken");
+
+    // Don't attempt connection without a token — server will reject it anyway
+    if (!token) {
+      setConnectionStatus("disconnected");
+      return;
+    }
+
+    const url = `${WS_URL}?token=${token}`;
     setConnectionStatus("connecting");
+
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
@@ -70,7 +82,6 @@ export function useRoomSocket(roomId: string) {
           break;
 
         case SocketEvent.CANVAS_UPDATE: {
-          // Draw the incoming stroke on canvas
           const stroke = msg.payload.canvasData as Stroke;
           const canvas = document.querySelector("canvas") as any;
           if (canvas?.__drawStroke) {
@@ -97,7 +108,12 @@ export function useRoomSocket(roomId: string) {
       setConnectionStatus("disconnected");
     };
 
+    // Clean up on unmount or roomId change
+    const handleBeforeUnload = () => ws.close();
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
     return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       ws.close();
     };
   }, [roomId]);

@@ -18,17 +18,12 @@ export default function AuthPage({ mode }: Props) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    console.log("[AuthPage] Mounted");
-    console.log("[AuthPage] Mode:", isSignup ? "SIGNUP" : "SIGNIN");
   }, [isSignup]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    console.log("[AuthPage] Form submitted");
-
     if (loading) {
-      console.warn("[AuthPage] Prevented duplicate submission");
       return;
     }
 
@@ -36,18 +31,12 @@ export default function AuthPage({ mode }: Props) {
       setLoading(true);
 
       if (isSignup) {
-        console.log("[AuthPage] Sending signup request", {
-          name,
-          email,
-        });
-
         const res = await api.post("/home/signup", {
           name,
           email,
           password
         });
 
-        console.log("[AuthPage] Signup success:", res.data);
         const { verificationToken } = res.data;
               
         // ADD THIS LINE - clear any old stale token
@@ -55,32 +44,18 @@ export default function AuthPage({ mode }: Props) {
               
         sessionStorage.setItem("verificationToken", verificationToken);
         sessionStorage.setItem("email", email);
-              
-              
-
-        console.log("[AuthPage] Stored verificationToken & email");
-        console.log("[AuthPage] Navigating to /verify-otp");
 
         navigate("/verify-otp");
       } else {
-        console.log("[AuthPage] Sending signin request", {
-          email,
-        });
-
         const res = await api.post("/home/signin", {
           email,
           password
         });
 
-        console.log("[AuthPage] Signin success:", res.data);
-
         const { accessToken, refreshToken } = res.data;
 
         localStorage.setItem("accessToken", accessToken);
         localStorage.setItem("refreshToken", refreshToken);
-
-        console.log("[AuthPage] Stored access & refresh tokens");
-        console.log("[AuthPage] Navigating to /dashboard");
 
         navigate("/dashboard");
       }
@@ -101,7 +76,6 @@ export default function AuthPage({ mode }: Props) {
       alert(err.response?.data?.message || "Something went wrong");
     } finally {
       setLoading(false);
-      console.log("[AuthPage] Loading reset");
     }
   };
 
@@ -146,7 +120,6 @@ export default function AuthPage({ mode }: Props) {
                 placeholder="Full Name"
                 value={name}
                 onChange={(e) => {
-                  console.log("[AuthPage] Name changed:", e.target.value);
                   setName(e.target.value);
                 }}
                 className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
@@ -159,7 +132,6 @@ export default function AuthPage({ mode }: Props) {
               placeholder="Email"
               value={email}
               onChange={(e) => {
-                console.log("[AuthPage] Email changed:", e.target.value);
                 setEmail(e.target.value);
               }}
               className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
@@ -171,7 +143,6 @@ export default function AuthPage({ mode }: Props) {
               placeholder="Password"
               value={password}
               onChange={(e) => {
-                console.log("[AuthPage] Password updated");
                 setPassword(e.target.value);
               }}
               className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
@@ -201,7 +172,6 @@ export default function AuthPage({ mode }: Props) {
                 Already have an account?{" "}
                 <button
                   onClick={() => {
-                    console.log("[AuthPage] Switching to /signin");
                     navigate("/signin");
                   }}
                   className="text-indigo-600 font-medium hover:underline"
@@ -214,7 +184,6 @@ export default function AuthPage({ mode }: Props) {
                 Don’t have an account?{" "}
                 <button
                   onClick={() => {
-                    console.log("[AuthPage] Switching to /signup");
                     navigate("/signup");
                   }}
                   className="text-indigo-600 font-medium hover:underline"
