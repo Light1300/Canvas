@@ -38,4 +38,5 @@ export interface ExtendedWebSocket extends WebSocket {
   isAlive?: boolean;
   connectionId?: string;
   currentRoom?: string | null;
+  userId: string;
 }

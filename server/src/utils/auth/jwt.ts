@@ -10,7 +10,7 @@ if (!ACCESS_SECRET || !REFRESH_SECRET) {
 
 export const generateAccessToken = (userId: string, email: string) => {
   return jwt.sign(
-    { userId, email },
+    { userId, email , isVerified: true},
     ACCESS_SECRET,
     { expiresIn: "15m" }
   );
