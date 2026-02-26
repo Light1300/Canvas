@@ -6,21 +6,15 @@ import { createSocketRouter } from "./ws.router.js";
 import { redisPublisher, redisSubscriber } from "../utils/redis/redisClient.js";
 import { RoomModel } from "../modules/rooms/room.schema.js";
 import { SocketEvent, SocketMessage } from "./socket.types.js";
+import { getUserColor } from "../utils/user-colors.js";
 import jwt from "jsonwebtoken";
 import { parse } from "url";
 
+const connections = new Map<string, ExtendedWebSocket>();
 
-// All room coordination is in Redis.
-
-const connections = new Map<string, ExtendedWebSocket>(); 
-
-// Redis pub/sub handles cross-instance broadcasting
 const broadcastToRoom = (roomId: string, message: SocketMessage) => {
   for (const socket of connections.values()) {
-    if (
-      socket.currentRoom === roomId &&
-      socket.readyState === WebSocket.OPEN
-    ) {
+    if (socket.currentRoom === roomId && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(message));
     }
   }
@@ -28,7 +22,6 @@ const broadcastToRoom = (roomId: string, message: SocketMessage) => {
 
 export const initWebSocketServer = (server: Server) => {
   const wss = new WebSocketServer({ noServer: true });
-
 
   server.on("upgrade", (request, socket, head) => {
     try {
@@ -44,7 +37,7 @@ export const initWebSocketServer = (server: Server) => {
       const decoded = jwt.verify(
         token,
         process.env.ACCESS_TOKEN_SECRET!
-      ) as { userId: string; isVerified: boolean };
+      ) as { userId: string; isVerified: boolean; email: string; name: string };
 
       if (!decoded.isVerified) {
         socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
@@ -65,115 +58,64 @@ export const initWebSocketServer = (server: Server) => {
 
   const { handleMessage } = createSocketRouter({ connections });
 
-  // Redis pub/sub subscriber 
   redisSubscriber.pSubscribe("room:*", (message: string, channel: string) => {
     const roomId = channel.replace("room:", "").replace(":events", "");
     if (!roomId) return;
-
     const parsed = JSON.parse(message) as SocketMessage;
     broadcastToRoom(roomId, parsed);
   });
 
-
   setInterval(async () => {
     const now = new Date();
-    const expiredRooms = await RoomModel.find({
-      expiresAt: { $lte: now },
-    }).lean();
-
+    const expiredRooms = await RoomModel.find({ expiresAt: { $lte: now } }).lean();
     for (const room of expiredRooms) {
       const roomId = room.roomId;
-
-      // Notify all instances via pub/sub
-      await redisPublisher.publish(
-        `room:${roomId}`,
-        JSON.stringify({
-          type: SocketEvent.ROOM_EXPIRED,
-          payload: { roomId },
-        })
-      );
-
-      // Clean up Redis keys
+      await redisPublisher.publish(`room:${roomId}`, JSON.stringify({ type: SocketEvent.ROOM_EXPIRED, payload: { roomId } }));
       await redisPublisher.del(`room:${roomId}:users`);
       await redisPublisher.del(`room:${roomId}:strokes`);
       await RoomModel.deleteOne({ roomId });
     }
   }, 30000);
 
-  //  Connection lifecycle 
   wss.on("connection", (ws: WebSocket, request) => {
     const socket = ws as ExtendedWebSocket;
+    const user = (request as any).user as { userId: string; email: string; name: string };
 
     socket.isAlive = true;
     socket.connectionId = randomUUID();
     socket.currentRoom = null;
-
-    const user = (request as any).user as { userId: string };
     socket.userId = user.userId;
+    socket.username = user.name;
+    socket.color = getUserColor(user.userId);
 
-    // Register in local connections map
     connections.set(socket.connectionId, socket);
-    console.log(`[WS] Connected: ${socket.connectionId} (user: ${socket.userId})`);
+    console.log(`[WS] Connected: ${socket.connectionId} (${socket.username})`);
 
-    socket.on("pong", () => {
-      socket.isAlive = true;
-    });
-
-    socket.on("message", async (data: Buffer) => {
-      await handleMessage(socket, data);
-    });
+    socket.on("pong", () => { socket.isAlive = true; });
+    socket.on("message", async (data: Buffer) => { await handleMessage(socket, data); });
 
     socket.on("close", async () => {
-      const currentRoom = socket.currentRoom;
-
-      // Always remove from local connections
       connections.delete(socket.connectionId);
-      console.log(`[WS] Disconnected: ${socket.connectionId}`);
-
+      const currentRoom = socket.currentRoom;
       if (!currentRoom) return;
 
-      // Remove from Redis membership
-      await redisPublisher.sRem(
-        `room:${currentRoom}:users`,
-        socket.connectionId
-      );
-
+      await redisPublisher.sRem(`room:${currentRoom}:users`, socket.connectionId);
       const count = await redisPublisher.sCard(`room:${currentRoom}:users`);
 
-      // If room is now empty, set TTL 
       if (count === 0) {
         await redisPublisher.expire(`room:${currentRoom}:users`, 86400);
         await redisPublisher.expire(`room:${currentRoom}:strokes`, 86400);
-        console.log(`[WS] Room ${currentRoom} is empty — TTL set to 24h`);
       }
 
-      // Notify all instances via pub/sub
-      await redisPublisher.publish(
-        `room:${currentRoom}`,
-        JSON.stringify({
-          type: SocketEvent.USER_LEFT,
-          payload: { roomId: currentRoom, userId: socket.userId },
-        })
-      );
-
-      await redisPublisher.publish(
-        `room:${currentRoom}`,
-        JSON.stringify({
-          type: SocketEvent.USER_COUNT_UPDATED,
-          payload: { roomId: currentRoom, count },
-        })
-      );
+      await redisPublisher.publish(`room:${currentRoom}`, JSON.stringify({ type: SocketEvent.CURSOR_LEAVE, payload: { roomId: currentRoom, userId: socket.userId } }));
+      await redisPublisher.publish(`room:${currentRoom}`, JSON.stringify({ type: SocketEvent.USER_LEFT, payload: { roomId: currentRoom, userId: socket.userId } }));
+      await redisPublisher.publish(`room:${currentRoom}`, JSON.stringify({ type: SocketEvent.USER_COUNT_UPDATED, payload: { roomId: currentRoom, count } }));
     });
   });
 
-  // Heartbeat 
   const interval = setInterval(() => {
     for (const socket of connections.values()) {
-      if (!socket.isAlive) {
-        console.log(`[WS] Terminating dead connection: ${socket.connectionId}`);
-        socket.terminate();
-        return;
-      }
+      if (!socket.isAlive) { socket.terminate(); return; }
       socket.isAlive = false;
       socket.ping();
     }

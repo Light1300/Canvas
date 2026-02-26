@@ -50,7 +50,7 @@ export const refreshTokenHandler = async (event: any) => {
             })
         }
     }
-    const newAccess = generateAccessToken(userId, user.email);
+    const newAccess = generateAccessToken(userId, user.email, user.name);
     const newRefresh = generateRefreshToken(userId);
 
     await db.collection("refreshTokens").insertOne({

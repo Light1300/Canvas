@@ -8,9 +8,9 @@ if (!ACCESS_SECRET || !REFRESH_SECRET) {
   throw new Error("JWT secrets not defined");
 }
 
-export const generateAccessToken = (userId: string, email: string) => {
+export const generateAccessToken = (userId: string, email: string, name: string) => {
   return jwt.sign(
-    { userId, email , isVerified: true},
+    { userId, email, name, isVerified: true },
     ACCESS_SECRET,
     { expiresIn: "15m" }
   );
@@ -28,13 +28,13 @@ export const verifyAccessToken = (token: string) => {
   return jwt.verify(token, ACCESS_SECRET) as {
     userId: string;
     email: string;
+    name: string;
+    isVerified: boolean;
   };
 };
 
 export const verifyRefreshToken = (token: string) => {
-  return jwt.verify(token, REFRESH_SECRET) as {
-    userId: string;
-  };
+  return jwt.verify(token, REFRESH_SECRET) as { userId: string };
 };
 
 export const hashToken = (token: string) => {
