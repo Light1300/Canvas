@@ -24,7 +24,8 @@ export default function Canvas({ roomId, sendStroke }: Props) {
       const snapshot = ctxRef.current?.getImageData(0, 0, canvas.width, canvas.height);
       canvas.width = parent.clientWidth;
       canvas.height = parent.clientHeight;
-      const ctx = canvas.getContext("2d")!;
+      // willReadFrequently: true suppresses browser warning and optimises getImageData
+      const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctxRef.current = ctx;
@@ -75,6 +76,7 @@ export default function Canvas({ roomId, sendStroke }: Props) {
     ctxRef.current?.beginPath();
   }, [roomId, sendStroke, color, lineWidth]);
 
+  // Draw a single incoming stroke from another user (incremental)
   const drawExternalStroke = useCallback((stroke: Stroke) => {
     const ctx = ctxRef.current;
     if (!ctx || stroke.points.length < 2) return;
@@ -91,10 +93,41 @@ export default function Canvas({ roomId, sendStroke }: Props) {
     ctx.beginPath();
   }, []);
 
+  // Replace entire canvas with full history (INITIAL_STATE on join)
+  const replaceStrokes = useCallback((strokes: Stroke[]) => {
+    const canvas = canvasRef.current;
+    const ctx = ctxRef.current;
+    if (!canvas || !ctx) return;
+
+    // Full reset — wipe everything
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Replay all strokes in order
+    for (const stroke of strokes) {
+      if (stroke.points.length < 2) continue;
+      ctx.beginPath();
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = stroke.width;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+      for (let i = 1; i < stroke.points.length; i++) {
+        ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+      }
+      ctx.stroke();
+      ctx.beginPath();
+    }
+  }, []);
+
+  // Expose both methods on the canvas DOM element
+  // useRoomSocket calls these directly without React coupling
   useEffect(() => {
     const canvas = canvasRef.current as any;
-    if (canvas) canvas.__drawStroke = drawExternalStroke;
-  }, [drawExternalStroke]);
+    if (canvas) {
+      canvas.__drawStroke = drawExternalStroke;
+      canvas.__replaceStrokes = replaceStrokes;
+    }
+  }, [drawExternalStroke, replaceStrokes]);
 
   return (
     <canvas

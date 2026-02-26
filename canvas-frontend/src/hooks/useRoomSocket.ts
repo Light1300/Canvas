@@ -8,13 +8,20 @@ const WS_URL = process.env.REACT_APP_WS_URL || "ws://localhost:8080";
 const SocketEvent = {
   JOIN_ROOM: "JOIN_ROOM",
   CANVAS_UPDATE: "CANVAS_UPDATE",
+  INITIAL_STATE: "INITIAL_STATE",
   ROOM_EXPIRED: "ROOM_EXPIRED",
   USER_JOINED: "USER_JOINED",
   USER_LEFT: "USER_LEFT",
   USER_COUNT_UPDATED: "USER_COUNT_UPDATED",
 } as const;
 
-export function useRoomSocket(roomId: string) {
+interface UseRoomSocketReturn {
+  connectionStatus: ConnectionStatus;
+  userCount: number;
+  sendStroke: (stroke: Stroke) => void;
+}
+
+export function useRoomSocket(roomId: string): UseRoomSocketReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("idle");
   const [userCount, setUserCount] = useState(0);
@@ -36,7 +43,7 @@ export function useRoomSocket(roomId: string) {
   useEffect(() => {
     if (!roomId) return;
 
-    // Prevent duplicate connections (StrictMode / double mount guard)
+    // Prevent duplicate connections (StrictMode / double-mount guard)
     if (
       wsRef.current?.readyState === WebSocket.OPEN ||
       wsRef.current?.readyState === WebSocket.CONNECTING
@@ -45,8 +52,6 @@ export function useRoomSocket(roomId: string) {
     }
 
     const token = localStorage.getItem("accessToken");
-
-    // Don't attempt connection without a token — server will reject it anyway
     if (!token) {
       setConnectionStatus("disconnected");
       return;
@@ -60,12 +65,10 @@ export function useRoomSocket(roomId: string) {
 
     ws.onopen = () => {
       setConnectionStatus("connected");
-      ws.send(
-        JSON.stringify({
-          type: SocketEvent.JOIN_ROOM,
-          payload: { roomId },
-        })
-      );
+      ws.send(JSON.stringify({
+        type: SocketEvent.JOIN_ROOM,
+        payload: { roomId },
+      }));
     };
 
     ws.onmessage = (event) => {
@@ -77,10 +80,18 @@ export function useRoomSocket(roomId: string) {
       }
 
       switch (msg.type) {
-        case SocketEvent.USER_COUNT_UPDATED:
-          setUserCount(msg.payload.count);
-          break;
 
+        // Full history on join — replace entire canvas
+        case SocketEvent.INITIAL_STATE: {
+          const strokes = msg.payload.strokes as Stroke[];
+          const canvas = document.querySelector("canvas") as any;
+          if (canvas?.__replaceStrokes) {
+            canvas.__replaceStrokes(strokes);
+          }
+          break;
+        }
+
+        // Incremental stroke from another user
         case SocketEvent.CANVAS_UPDATE: {
           const stroke = msg.payload.canvasData as Stroke;
           const canvas = document.querySelector("canvas") as any;
@@ -89,6 +100,10 @@ export function useRoomSocket(roomId: string) {
           }
           break;
         }
+
+        case SocketEvent.USER_COUNT_UPDATED:
+          setUserCount(msg.payload.count);
+          break;
 
         case SocketEvent.ROOM_EXPIRED:
           setConnectionStatus("disconnected");
@@ -100,15 +115,9 @@ export function useRoomSocket(roomId: string) {
       }
     };
 
-    ws.onclose = () => {
-      setConnectionStatus("disconnected");
-    };
+    ws.onclose = () => setConnectionStatus("disconnected");
+    ws.onerror = () => setConnectionStatus("disconnected");
 
-    ws.onerror = () => {
-      setConnectionStatus("disconnected");
-    };
-
-    // Clean up on unmount or roomId change
     const handleBeforeUnload = () => ws.close();
     window.addEventListener("beforeunload", handleBeforeUnload);
 
