@@ -2,21 +2,36 @@
   "name": "canvas-frontend",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
+    "axios": "^1.13.5",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.23.1",
+    "react-scripts": "5.0.1",
+    "typescript": "^4.9.5",
+    "web-vitals": "^2.1.4"
+  },
+  "devDependencies": {
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^13.5.0",
+    "@types/babel__core": "^7.20.5",
+    "@types/babel__generator": "^7.27.0",
+    "@types/babel__template": "^7.4.4",
+    "@types/babel__traverse": "^7.28.0",
+    "@types/bonjour": "^3.5.13",
+    "@types/estree": "^1.0.8",
     "@types/jest": "^27.5.2",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "axios": "^1.13.5",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "react-router-dom": "^7.13.0",
-    "react-scripts": "5.0.1",
-    "typescript": "^4.9.5",
-    "web-vitals": "^2.1.4"
+    "@types/node": "^20.19.34",
+    "@types/prettier": "^2.7.3",
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "@types/trusted-types": "^2.0.7",
+    "tailwindcss": "^3.4.19"
   },
   "scripts": {
     "start": "react-scripts start",
@@ -41,17 +56,5 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
-  },
-  "devDependencies": {
-    "@types/babel__core": "^7.20.5",
-    "@types/babel__generator": "^7.27.0",
-    "@types/babel__template": "^7.4.4",
-    "@types/babel__traverse": "^7.28.0",
-    "@types/bonjour": "^3.5.13",
-    "@types/estree": "^1.0.8",
-    "@types/node": "^25.3.0",
-    "@types/prettier": "^2.7.3",
-    "@types/trusted-types": "^2.0.7",
-    "tailwindcss": "^3.4.19"
   }
 }
