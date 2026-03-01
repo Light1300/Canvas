@@ -1,11 +1,11 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import LandingPage from "./pages/LandingPage";
 import Signin from "./components/signin-singup/signin";
 import Signup from "./components/signin-singup/signup";
 import VerifyOtp from "./components/signin-singup/verifyOtp";
 import Dashboard from "./pages/Dashboard";
 import RoomPage from "./pages/room/RoomPage";
 
-// Simple auth guard
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem("accessToken");
   if (!token) return <Navigate to="/signin" replace />;
@@ -16,7 +16,9 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Navigate to="/signin" />} />
+        {/* Landing page — no auth required */}
+        <Route path="/" element={<LandingPage />} />
+
         <Route path="/signup" element={<Signup />} />
         <Route path="/signin" element={<Signin />} />
         <Route path="/verify-otp" element={<VerifyOtp />} />
@@ -29,7 +31,6 @@ function App() {
             </PrivateRoute>
           }
         />
-
         <Route
           path="/room/:roomId"
           element={
@@ -39,8 +40,8 @@ function App() {
           }
         />
 
-        {/* Catch all */}
-        <Route path="*" element={<Navigate to="/signin" />} />
+        {/* Catch all → landing */}
+        <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </BrowserRouter>
   );
