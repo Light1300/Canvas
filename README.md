@@ -99,33 +99,24 @@ Real-time collaborative drawing tools require sub-50ms synchronization across mu
 - Business logic is separated by domain: auth, rooms, websocket events, rate limiting
 
 ### High-Level Diagram
+flowchart TD
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                      CLIENT (React + TS)                      │
-│   Canvas.tsx · GhostCursors.tsx · useRoomSocket.ts           │
-└─────────────────────────┬────────────────────────────────────┘
-                          │  HTTPS + WSS (JWT in query param)
-          ┌───────────────▼───────────────┐
-          │         RAILWAY               │
-          │                               │
-          │  ┌─────────────┐  ┌────────┐  │
-          │  │   Express   │  │   ws   │  │
-          │  │   HTTP API  │  │  WSS   │  │
-          │  └──────┬──────┘  └───┬────┘  │
-          └─────────┼─────────────┼───────┘
-                    │             │
-          ┌─────────▼─────────────▼───────┐
-          │            REDIS              │
-          │  Sets · Lists · Pub/Sub       │
-          │  Strings · TTL · Rate Limit   │
-          └───────────────┬───────────────┘
-                          │
-          ┌───────────────▼───────────────┐
-          │           MONGODB             │
-          │  users · rooms (TTL index)    │
-          └───────────────────────────────┘
-```
+    Client[Client<br/>React + TypeScript<br/>Canvas · GhostCursors · useRoomSocket]
+
+    subgraph Railway Deployment
+        Express[Express<br/>HTTP API]
+        WS[WebSocket Server<br/>ws]
+    end
+
+    Redis[(Redis<br/>Sets · Lists · Pub/Sub · TTL)]
+    Mongo[(MongoDB<br/>users · rooms TTL index)]
+
+    Client -->|HTTPS| Express
+    Client -->|WSS| WS
+
+    Express --> Redis
+    WS --> Redis
+    Express --> Mongo
 
 ### Why Modular Monolith Over Microservices?
 
@@ -135,19 +126,27 @@ At this scale, microservices would add network hops between auth and room servic
 
 The backend is **stateless** — the only in-memory state is a `Map<connectionId, WebSocket>` of live socket references. Room membership, stroke history, and user counts all live in Redis.
 
-```
-              Load Balancer
-             /             \
-    Instance A          Instance B
-    connections:         connections:
-    { conn-1: ws1 }     { conn-2: ws2 }
-         |                    |
-         └────────────────────┘
-                  Redis
-          room:X:users = { conn-1, conn-2 }
-          room:X:strokes = [ ... ]
-          PUBLISH room:X → both instances receive → each forwards to local sockets
-```
+flowchart TD
+
+    LB[Load Balancer]
+
+    subgraph Instance A
+        A1[Express + WS]
+        A2[connections Map]
+    end
+
+    subgraph Instance B
+        B1[Express + WS]
+        B2[connections Map]
+    end
+
+    Redis[(Redis<br/>Shared State + Pub/Sub)]
+
+    LB --> A1
+    LB --> B1
+
+    A1 --> Redis
+    B1 --> Redis
 
 No sticky sessions required. Any instance can serve any client.
 
@@ -211,23 +210,16 @@ server.on("upgrade", (request, socket, head) => {
 
 ### Client Authentication Flow
 
-```
-Client                                  Server
-  │                                        │
-  │  GET /?token=<accessJWT>               │
-  │  Headers: Upgrade: websocket           │
-  ├───────────────────────────────────────►│
-  │                                        │  jwt.verify(token, ACCESS_TOKEN_SECRET)
-  │                                        │  → { userId, name, email, isVerified }
-  │                                        │  if (!isVerified) → 403, socket.destroy()
-  │                                        │  if (invalid)    → 401, socket.destroy()
-  │◄───────────────────────────────────────┤
-  │  101 Switching Protocols               │
-  │  (connection established)              │
-  │                                        │  socket.userId   = decoded.userId
-  │                                        │  socket.username = decoded.name
-  │                                        │  socket.color    = getUserColor(userId)
-```
+sequenceDiagram
+    participant Client
+    participant Server
+    participant JWT
+
+    Client->>Server: Upgrade request (?token=JWT)
+    Server->>JWT: verify(token)
+    JWT-->>Server: decoded payload
+    Server-->>Client: 101 Switching Protocols
+    
 
 `userId`, `username`, and `color` are set **server-side** from the verified JWT. Clients cannot spoof their identity by sending a crafted payload.
 
@@ -454,6 +446,7 @@ Redis Pub/Sub is **at-most-once** — no persistence, no acknowledgement. If the
 
 For canvas strokes: the stroke is already persisted to Redis List via `RPUSH` before publishing. A client that misses the pub/sub message will receive the stroke on their next `JOIN_ROOM` via `INITIAL_STATE`. For cursor moves: loss is invisible — the next cursor move event corrects the position. This is an acceptable tradeoff for the latency benefits.
 
+
 ### Why Redis Pub/Sub Over Kafka or NATS?
 
 | | Redis Pub/Sub | Kafka | NATS |
@@ -482,6 +475,18 @@ const strokes = raw.map(s => JSON.parse(s));
 // Sends as INITIAL_STATE to the joining socket
 socket.send(JSON.stringify({ type: "INITIAL_STATE", payload: { strokes } }));
 ```
+
+sequenceDiagram
+    participant UserA
+    participant Instance
+    participant Redis
+    participant UserB
+
+    UserA->>Instance: CANVAS_UPDATE
+    Instance->>Redis: RPUSH stroke
+    Instance->>Redis: PUBLISH event
+    Redis-->>Instance: Pub/Sub message
+    Instance-->>UserB: Broadcast stroke
 
 Client receives `INITIAL_STATE` → `canvas.__replaceStrokes(strokes)` → canvas cleared → all strokes redrawn in order. The late joiner sees the exact same canvas as everyone else.
 
