@@ -10,8 +10,8 @@
 [![MongoDB](https://img.shields.io/badge/MongoDB-Atlas-green)](https://mongodb.com)
 [![Railway](https://img.shields.io/badge/Deployed-Railway-purple)](https://railway.app)
 
-**Live Demo:** [your-frontend.railway.app](https://your-frontend.railway.app)  
-**API Docs:** [your-backend.railway.app/api-docs](https://your-backend.railway.app/api-docs)
+**Live Demo:** [canva-frontend-production.up.railway.app](https://canva-frontend-production.up.railway.app)
+**API Docs:** [canvas-production-671b.up.railway.app/api-docs](https://canvas-production-671b.up.railway.app/api-docs)
 
 </div>
 
@@ -99,24 +99,25 @@ Real-time collaborative drawing tools require sub-50ms synchronization across mu
 - Business logic is separated by domain: auth, rooms, websocket events, rate limiting
 
 ### High-Level Diagram
+
+```mermaid
 flowchart TD
+    Client["Client\nReact + TypeScript\nCanvas · GhostCursors · useRoomSocket"]
 
-    Client[Client<br/>React + TypeScript<br/>Canvas · GhostCursors · useRoomSocket]
-
-    subgraph Railway Deployment
-        Express[Express<br/>HTTP API]
-        WS[WebSocket Server<br/>ws]
+    subgraph Railway["Railway Deployment"]
+        Express["Express\nHTTP API"]
+        WS["WebSocket Server\nws"]
     end
 
-    Redis[(Redis<br/>Sets · Lists · Pub/Sub · TTL)]
-    Mongo[(MongoDB<br/>users · rooms TTL index)]
+    Redis[("Redis\nSets · Lists · Pub/Sub · TTL")]
+    Mongo[("MongoDB\nusers · rooms TTL index")]
 
     Client -->|HTTPS| Express
     Client -->|WSS| WS
-
     Express --> Redis
     WS --> Redis
     Express --> Mongo
+```
 
 ### Why Modular Monolith Over Microservices?
 
@@ -126,27 +127,27 @@ At this scale, microservices would add network hops between auth and room servic
 
 The backend is **stateless** — the only in-memory state is a `Map<connectionId, WebSocket>` of live socket references. Room membership, stroke history, and user counts all live in Redis.
 
+```mermaid
 flowchart TD
+    LB["Load Balancer"]
 
-    LB[Load Balancer]
-
-    subgraph Instance A
-        A1[Express + WS]
-        A2[connections Map]
+    subgraph A["Instance A"]
+        A1["Express + WS"]
+        A2["connections Map\nlocal only"]
     end
 
-    subgraph Instance B
-        B1[Express + WS]
-        B2[connections Map]
+    subgraph B["Instance B"]
+        B1["Express + WS"]
+        B2["connections Map\nlocal only"]
     end
 
-    Redis[(Redis<br/>Shared State + Pub/Sub)]
+    Redis[("Redis\nShared State + Pub/Sub")]
 
     LB --> A1
     LB --> B1
-
     A1 --> Redis
     B1 --> Redis
+```
 
 No sticky sessions required. Any instance can serve any client.
 
@@ -167,7 +168,7 @@ No sticky sessions required. Any instance can serve any client.
 
 **If one instance crashes:** Railway detects the failed health check (`GET /health` returns non-200 or times out) and restarts the container. Redis retains all room state — on restart, the new instance reconnects to Redis and is immediately operational. WebSocket clients detect the disconnect via the `close` event and reconnect (handled by `useRoomSocket` reconnect logic). No data is lost.
 
-**Restart survivability:** Because zero application state lives in the process (only Redis and MongoDB), a restart is transparent. Clients reconnect, send `JOIN_ROOM`, receive `INITIAL_STATE` from Redis stroke history, and resume drawing.
+**Restart survivability:** Because zero application state lives in the process, a restart is transparent. Clients reconnect, send `JOIN_ROOM`, receive `INITIAL_STATE` from Redis stroke history, and resume drawing.
 
 ---
 
@@ -184,16 +185,12 @@ No sticky sessions required. Any instance can serve any client.
 | Cursor positions | ❌ Unusable | ❌ Unusable | ✅ Native |
 | Protocol | HTTP/1.1 | HTTP/1.1 | RFC 6455 |
 
-Drawing requires sub-50ms round trips. HTTP polling at any sane interval feels laggy and wastes bandwidth on empty responses. SSE is unidirectional — clients can't send strokes without a separate HTTP channel, doubling connection complexity.
-
 ### WebSocket Server Initialization
 
 ```typescript
-// Express HTTP server is passed to the WebSocket server
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
-// Intercept the HTTP upgrade handshake
 server.on("upgrade", (request, socket, head) => {
   // 1. Extract JWT from query param (?token=...)
   // 2. jwt.verify() — reject with 401 if invalid
@@ -206,20 +203,30 @@ server.on("upgrade", (request, socket, head) => {
 });
 ```
 
-`noServer: true` means the WebSocket server doesn't bind its own port — it shares port 8080 with Express. The upgrade handshake is intercepted before the WebSocket connection is established, so **no unauthenticated socket ever enters the system**.
+`noServer: true` means the WebSocket server shares port 8080 with Express. The upgrade handshake is intercepted before the WebSocket connection is established — **no unauthenticated socket ever enters the system**.
 
 ### Client Authentication Flow
 
+```mermaid
 sequenceDiagram
     participant Client
     participant Server
     participant JWT
 
-    Client->>Server: Upgrade request (?token=JWT)
-    Server->>JWT: verify(token)
-    JWT-->>Server: decoded payload
-    Server-->>Client: 101 Switching Protocols
-    
+    Client->>Server: GET /?token=JWT (Upgrade: websocket)
+    Server->>JWT: verify(token, ACCESS_TOKEN_SECRET)
+
+    alt invalid or not verified
+        JWT-->>Server: throws error
+        Server-->>Client: 401 / 403 socket.destroy()
+    else valid
+        JWT-->>Server: decoded payload
+        Server-->>Client: 101 Switching Protocols
+        Note over Server: socket.userId = decoded.userId
+        Note over Server: socket.username = decoded.name
+        Note over Server: socket.color = getUserColor(userId)
+    end
+```
 
 `userId`, `username`, and `color` are set **server-side** from the verified JWT. Clients cannot spoof their identity by sending a crafted payload.
 
@@ -232,30 +239,36 @@ sequenceDiagram
 
 ### Handling Reconnects
 
-`useRoomSocket.ts` implements automatic reconnection:
-
 ```typescript
-// On close event, attempt reconnect after delay
 ws.onclose = () => {
   setConnectionStatus("disconnected");
   setTimeout(() => connectWebSocket(), 2000); // 2s backoff
 };
 ```
 
-On reconnect, the client sends `JOIN_ROOM` again → server sends `INITIAL_STATE` from Redis → canvas replays all strokes. The user experience is seamless.
+On reconnect, the client sends `JOIN_ROOM` → server sends `INITIAL_STATE` from Redis → canvas replays all strokes. The user experience is seamless.
 
-### Unexpected Disconnects
+### Unexpected Disconnects & Heartbeat
 
-When a browser closes, refreshes, or the network drops, no `close` frame may be sent. The heartbeat detects this:
+```mermaid
+sequenceDiagram
+    participant Server
+    participant Client
 
+    loop Every 10 seconds
+        Server->>Server: socket.isAlive = false
+        Server->>Client: ping()
+
+        alt pong received
+            Client-->>Server: pong
+            Server->>Server: socket.isAlive = true ✅
+        else no pong (browser crashed / network drop)
+            Server->>Server: socket.terminate()
+            Server->>Server: close event fires
+            Note over Server: SREM from Redis<br/>broadcast CURSOR_LEAVE + USER_LEFT
+        end
+    end
 ```
-Server pings every 10 seconds
-  ├── socket.isAlive = false, socket.ping()
-  ├── If pong received: socket.isAlive = true ✅
-  └── If no pong by next interval: socket.terminate() → 'close' event fires → cleanup runs
-```
-
-Cleanup: `SREM` from Redis user set → count recalculated → `CURSOR_LEAVE` + `USER_LEFT` + `USER_COUNT_UPDATED` broadcast to room.
 
 ### Stale Connection Reconciliation
 
@@ -270,12 +283,12 @@ for (const id of members) {
 }
 ```
 
-This handles the edge case where a server crashed without cleaning up Redis — the next join sweeps stale entries.
+This handles crashed instances that left stale entries in Redis — the next join always sweeps them clean.
 
 ### Memory Leak Prevention
 
-- `connections` Map keyed by `connectionId` — entries removed in `close` handler
-- `socket.on("error")` triggers same cleanup as `close` — no leaked references on error
+- `connections` Map entries removed in `close` handler
+- `socket.on("error")` triggers same cleanup as `close`
 - Heartbeat terminates unresponsive sockets — they don't accumulate
 - `socket.currentRoom` set to `null` after `LEAVE_ROOM` — prevents double-cleanup on disconnect
 
@@ -284,7 +297,6 @@ This handles the edge case where a server crashed without cleaning up Redis — 
 - Client-side: cursor events throttled to 50ms (max 20/sec) in `useRoomSocket`
 - Server-side: rate limiting on HTTP endpoints via `express-rate-limit` + Redis store
 - WebSocket messages are typed and validated — unrecognized event types are silently dropped
-- No per-socket rate limiting currently (future: track message count per connectionId in Redis)
 
 ---
 
@@ -292,7 +304,7 @@ This handles the edge case where a server crashed without cleaning up Redis — 
 
 ### Why Redis?
 
-Redis serves four distinct roles in this system simultaneously: **ephemeral state store**, **message broker**, **rate limit counter store**, and **token store**. No other single tool does all four with sub-millisecond latency. PostgreSQL could store the data but not act as a pub/sub broker. Kafka could broker messages but adds ZooKeeper and operational complexity. Redis does everything in one.
+Redis serves four distinct roles in this system simultaneously: **ephemeral state store**, **message broker**, **rate limit counter store**, and **token store**. No other single tool does all four with sub-millisecond latency.
 
 ### Data Structures Used
 
@@ -305,7 +317,6 @@ SREM   room:{roomId}:users {connectionId}    // leave     O(1)
 SCARD  room:{roomId}:users                   // count     O(1)
 SMEMBERS room:{roomId}:users                 // sweep     O(N)
 ```
-Sets prevent duplicate membership and provide O(1) add/remove/count. Membership keyed by `connectionId` (not `userId`) so a user with two tabs counts as two presences.
 
 **Lists — Stroke History**
 ```
@@ -315,17 +326,15 @@ RPUSH  room:{roomId}:strokes {JSON}    // append stroke   O(1)
 LRANGE room:{roomId}:strokes 0 -1      // full history    O(N)
 LREM   room:{roomId}:strokes 0 {JSON}  // undo by value   O(N)
 ```
-Lists preserve insertion order — critical for stroke replay. Each stroke is a JSON string containing `strokeId`, `userId`, `points[]`, `color`, `width`.
 
 **Strings with TTL — Refresh Tokens**
 ```
-refresh:{sha256(token)} → userId    (TTL: 30 days = 2,592,000s)
+refresh:{sha256(token)} → userId    (TTL: 30 days)
 
 SETEX  refresh:{hash}  2592000  {userId}   // store
 GET    refresh:{hash}                       // validate
 DEL    refresh:{hash}                       // revoke / rotate
 ```
-Tokens stored hashed (SHA-256) — the raw token only exists in the HTTP response, never in the database.
 
 **Strings with TTL — Rate Limiting**
 ```
@@ -334,21 +343,17 @@ rl:room:{ip}     → count    (TTL: 3600s, max: 20)
 rl:refresh:{ip}  → count    (TTL: 900s,  max: 30)
 ```
 
-**Pub/Sub — Cross-Instance Broadcasting**
+### Redis Key Space Overview
+
+```mermaid
+flowchart LR
+    subgraph Keys["Redis Key Space"]
+        U["room:X:users\nSet — connectionIds\nSADD / SREM / SCARD"]
+        S["room:X:strokes\nList — ordered JSON\nRPUSH / LRANGE / LREM"]
+        T["refresh:sha256hash\nString + 30d TTL\nSETEX / GET / DEL"]
+        R["rl:type:ip\nString + window TTL\nINCR / EXPIRE"]
+    end
 ```
-Channel: room:{roomId}
-PUBLISH room:{roomId} {JSON message}
-PSUBSCRIBE room:*  → receives all room channels
-```
-
-### Why Store Room Members in Redis Instead of Memory?
-
-If stored in memory (`const rooms = new Map()`):
-- Instance restart → all membership lost → ghost users everywhere
-- Instance B cannot know who is connected to Instance A
-- Horizontal scaling is impossible — each instance has a different view
-
-Redis gives a **single shared view** of all room membership, visible to all instances simultaneously.
 
 ### TTL Strategy
 
@@ -359,20 +364,16 @@ Redis gives a **single shared view** of all room membership, visible to all inst
 | `refresh:{hash}` | Token created | 30 days |
 | `rl:*` | First hit in window | Window duration |
 
-Active rooms never expire — TTL is reset on every `CANVAS_UPDATE` via `EXPIRE room:{id}:strokes 86400`. When the MongoDB room TTL fires, the expiry watcher broadcasts `ROOM_EXPIRED` and explicitly deletes both Redis keys.
+Active rooms never expire — TTL is reset on every `CANVAS_UPDATE` via `EXPIRE room:{id}:strokes 86400`.
 
 ### Redis Crash Behavior
 
-- New WebSocket connections cannot join rooms (JOIN_ROOM fails)
-- Existing connections lose pub/sub — strokes no longer sync between users
-- Rate limiting fails open — all requests pass through (acceptable degradation)
-- Refresh token validation fails — users cannot refresh, must re-login after access token expires
-- Health endpoint returns 503 — Railway restarts the instance
-- On Redis recovery: all operations resume, stroke history preserved if Redis persisted to disk (RDB/AOF)
-
-### Data Consistency in Redis
-
-Redis is single-threaded for command execution — RPUSH and PUBLISH are atomic individually. The sequence `RPUSH → PUBLISH` is not atomic as a unit, but the worst case is a publish with no corresponding stroke (receiver does a re-fetch). This is acceptable — canvas sync is eventually consistent by design.
+- `JOIN_ROOM` fails — new users cannot enter rooms
+- `CANVAS_UPDATE` fails silently — strokes not persisted or broadcast cross-instance
+- Rate limiting fails open — requests pass through (acceptable degradation)
+- Refresh token validation fails — users cannot refresh after access token expires
+- Health endpoint returns 503 → Railway restarts the instance
+- On Redis recovery: all operations resume, stroke history preserved if RDB/AOF enabled
 
 ---
 
@@ -382,17 +383,26 @@ Redis is single-threaded for command execution — RPUSH and PUBLISH are atomic 
 
 Each server instance only holds WebSocket references for its **own** connected clients. Without a message bus, a stroke from User A (on Instance 1) would never reach User B (on Instance 2).
 
-```
-Without Pub/Sub:                    With Redis Pub/Sub:
+```mermaid
+flowchart LR
+    subgraph I1["Instance 1"]
+        UA["User A\ndraw stroke"]
+    end
 
-Instance 1    Instance 2            Instance 1         Instance 2
-User A ──►    User B                User A ──► PUBLISH ──► SUBSCRIBE ──► User B ✅
-              (never notified ❌)                 Redis channel
+    subgraph I2["Instance 2"]
+        UB["User B"]
+    end
+
+    Redis[("Redis\nroom:X channel")]
+
+    UA -->|"RPUSH + PUBLISH"| Redis
+    Redis -->|"pSubscribe room:*"| I2
+    I2 -->|"broadcastToRoom"| UB
 ```
 
 ### How Pub/Sub Enables Horizontal Scaling
 
-Every instance subscribes to `room:*` via `pSubscribe` (pattern subscribe). When any instance publishes to `room:{roomId}`, every other instance receives it and forwards to its local sockets in that room.
+Every instance subscribes to `room:*` via `pSubscribe` at startup. When any instance publishes to `room:{roomId}`, every other instance receives it and forwards to its local sockets.
 
 ```typescript
 // All instances subscribe at startup
@@ -406,46 +416,43 @@ redisSubscriber.pSubscribe("room:*", (message, channel) => {
 await redisPublisher.publish(`room:${roomId}`, JSON.stringify(message));
 ```
 
-### Channel Design
+### Full Stroke Flow
 
-**One channel per room:** `room:{roomId}`
+```mermaid
+sequenceDiagram
+    participant UserA as User A (Instance 1)
+    participant I1 as Instance 1
+    participant Redis
+    participant I2 as Instance 2
+    participant UserB as User B (Instance 2)
 
-All event types share the same channel. The `type` field in the message payload routes to the correct handler on the client.
+    UserA->>I1: CANVAS_UPDATE (stroke)
+    I1->>Redis: RPUSH room:X:strokes
+    I1->>Redis: PUBLISH room:X
+    Redis-->>I1: pSubscribe fires
+    Redis-->>I2: pSubscribe fires
+    I1-->>UserA: broadcastToRoom (local)
+    I2-->>UserB: broadcastToRoom (local)
+```
 
 ### Message Format
 
 ```typescript
 {
-  type: "CANVAS_UPDATE" | "USER_JOINED" | "USER_LEFT" | "CURSOR_MOVE" | 
+  type: "CANVAS_UPDATE" | "USER_JOINED" | "USER_LEFT" | "CURSOR_MOVE" |
         "CURSOR_LEAVE" | "UNDO" | "REDO" | "USER_COUNT_UPDATED" | "ROOM_EXPIRED",
   payload: {
     roomId: string,
-    // event-specific fields:
     stroke?: Stroke,        // CANVAS_UPDATE, REDO
     strokeId?: string,      // UNDO
     userId?: string,        // USER_JOINED, USER_LEFT, CURSOR_LEAVE
     username?: string,      // USER_JOINED, CURSOR_MOVE
-    color?: string,         // USER_JOINED, CURSOR_MOVE
+    color?: string,
     x?: number, y?: number, // CURSOR_MOVE
     count?: number,         // USER_COUNT_UPDATED
   }
 }
 ```
-
-### How Subscribers Know Which Room to Forward To
-
-The channel name encodes the room: `room:{roomId}`. The subscriber extracts `roomId` from the channel name and calls `broadcastToRoom(roomId, message)` which iterates `connections` and sends only to sockets where `socket.currentRoom === roomId`.
-
-### Avoiding Duplicate Broadcasts
-
-Each WebSocket connection exists on **exactly one** instance. When Instance A publishes, both Instance A and Instance B receive it via their subscribers. Instance A's `broadcastToRoom` sends to its local sockets. Instance B's `broadcastToRoom` sends to its local sockets. No socket is on two instances simultaneously — no duplicates.
-
-### What Happens If a Message Is Lost?
-
-Redis Pub/Sub is **at-most-once** — no persistence, no acknowledgement. If the subscriber is temporarily disconnected, messages during that window are lost.
-
-For canvas strokes: the stroke is already persisted to Redis List via `RPUSH` before publishing. A client that misses the pub/sub message will receive the stroke on their next `JOIN_ROOM` via `INITIAL_STATE`. For cursor moves: loss is invisible — the next cursor move event corrects the position. This is an acceptable tradeoff for the latency benefits.
-
 
 ### Why Redis Pub/Sub Over Kafka or NATS?
 
@@ -455,40 +462,29 @@ For canvas strokes: the stroke is already persisted to Redis List via `RPUSH` be
 | Latency | <1ms | 5–15ms | <1ms |
 | Persistence | ❌ (at-most-once) | ✅ | Optional |
 | Operational overhead | None | ZooKeeper + brokers | Separate cluster |
-| Ordering guarantee | Per-channel | Per-partition | Per-subject |
 | At-scale limit | ~100k msg/s | Millions/s | Millions/s |
 
-For this use case — ephemeral real-time events where loss of individual cursor events is invisible — Redis Pub/Sub is the right tool. Kafka would be appropriate if we needed audit logs, replay, or guaranteed delivery of every stroke.
+For ephemeral real-time events where loss of individual cursor events is invisible, Redis Pub/Sub is the right tool. Kafka would be appropriate if we needed guaranteed delivery of every stroke.
 
 ---
 
 ## 6. Real-Time Canvas Synchronization
 
-### How Late Joiners See Existing Strokes
+### Late Join Flow
 
-On `JOIN_ROOM`:
-```typescript
-// Server fetches full stroke history from Redis
-const raw = await redis.lRange(`room:${roomId}:strokes`, 0, -1);
-const strokes = raw.map(s => JSON.parse(s));
-
-// Sends as INITIAL_STATE to the joining socket
-socket.send(JSON.stringify({ type: "INITIAL_STATE", payload: { strokes } }));
-```
-
+```mermaid
 sequenceDiagram
-    participant UserA
-    participant Instance
+    participant LateUser as Late Joiner
+    participant Server
     participant Redis
-    participant UserB
 
-    UserA->>Instance: CANVAS_UPDATE
-    Instance->>Redis: RPUSH stroke
-    Instance->>Redis: PUBLISH event
-    Redis-->>Instance: Pub/Sub message
-    Instance-->>UserB: Broadcast stroke
-
-Client receives `INITIAL_STATE` → `canvas.__replaceStrokes(strokes)` → canvas cleared → all strokes redrawn in order. The late joiner sees the exact same canvas as everyone else.
+    LateUser->>Server: JOIN_ROOM
+    Server->>Redis: LRANGE room:X:strokes 0 -1
+    Redis-->>Server: [stroke1, stroke2, ..., strokeN]
+    Server-->>LateUser: INITIAL_STATE { strokes: [...] }
+    Note over LateUser: canvas.__replaceStrokes(strokes)
+    Note over LateUser: Canvas cleared → all strokes redrawn in order ✅
+```
 
 ### Why Stroke History Over Snapshot Images?
 
@@ -500,53 +496,55 @@ Client receives `INITIAL_STATE` → `canvas.__replaceStrokes(strokes)` → canva
 | Late join latency | Replay time (fast) | Transfer time (slow for large canvases) |
 | Implementation complexity | Low | High (canvas-to-base64, storage, serving) |
 
-Strokes are the natural unit of drawing. Storing them preserves every operation and enables undo as a first-class feature.
-
-### Performance Implications of Storing Strokes
-
-Each stroke is ~500 bytes of JSON (array of `{x, y}` points). A heavy 2-hour session might produce 5,000 strokes = 2.5MB in Redis. `LRANGE 0 -1` fetches all in one round trip. Network transfer of 2.5MB on a fast connection takes ~25ms — acceptable for a join operation.
-
-### Behavior With 10,000 Strokes
-
-`LRANGE` fetches all 10,000 strokes (~5MB) in one Redis command (~10ms). Network transfer to client: ~500ms on 100Mbps, 5s on 10Mbps. Canvas replay: O(N) redraws, ~2–5 seconds for 10,000 strokes.
-
-**Production mitigation (not yet implemented):**
-1. Every N strokes (e.g., 500), render canvas to base64 PNG → store in MongoDB as snapshot
-2. Reset Redis stroke list to empty
-3. Late joiners receive: snapshot (render instantly) + delta strokes since last snapshot
-4. Result: join latency capped regardless of session length
-
 ### Preventing Race Conditions in Drawing
 
-Canvas drawing is **append-only** — two users drawing simultaneously each produce independent strokes. Redis `RPUSH` is atomic. Two simultaneous RPUSHes are serialized by Redis's single-threaded execution. Order may differ between instances but both strokes are preserved — no data loss, no conflict.
+Canvas drawing is **append-only** — two users drawing simultaneously each produce independent strokes. Redis `RPUSH` is atomic. Two simultaneous RPUSHes are serialized by Redis's single-threaded execution. Both strokes are preserved — no data loss, no conflict.
 
 ### Eventual Consistency vs Strong Consistency
 
-**Eventually consistent (AP system under CAP).** 
-
-The sequence for a stroke is: `client draws → RPUSH to Redis → PUBLISH to channel → other clients render`. The RPUSH and PUBLISH are separate operations. In the rare case where RPUSH succeeds but PUBLISH fails, the stroke is in Redis (persistent) but other clients don't see it immediately — they'll see it on their next `JOIN_ROOM`. This is eventual consistency in practice.
+**Eventually consistent (AP system under CAP).** The sequence `client draws → RPUSH → PUBLISH → other clients render` involves two separate Redis operations. If RPUSH succeeds but PUBLISH fails, the stroke is in Redis (persistent) but other clients don't see it until their next `JOIN_ROOM`. This inconsistency window is sub-millisecond and imperceptible.
 
 ---
 
 ## 7. Security & Abuse Prevention
 
-### Input Validation
+### Auth & Token Flow
 
-WebSocket payloads are typed via TypeScript interfaces. Event handlers destructure only expected fields — unrecognized fields are ignored. No user-provided string is ever executed or rendered as HTML.
+```mermaid
+flowchart TD
+    A["POST /signup\nbcrypt hash password\ngenerate OTP"] --> B["verificationToken JWT\n10min TTL"]
+    B --> C["POST /verify-otp\ncheck OTP"]
+    C -->|valid| D["Issue accessToken 15min\nrefreshToken stored in Redis 30d"]
+    D --> E["WS upgrade\njwt.verify at handshake"]
+    E -->|invalid| F["401/403\nsocket.destroy()"]
+    E -->|valid| G["Connection established\nidentity set server-side ✅"]
+```
 
-### XSS Prevention
+### Refresh Token Rotation
 
-Canvas strokes are `{x, y}` coordinate arrays and CSS color strings. They are rendered via Canvas API (`ctx.lineTo`, `ctx.stroke`) — **never injected into the DOM**. Usernames are rendered via React's JSX which escapes all HTML entities by default. No `dangerouslySetInnerHTML` anywhere.
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server
+    participant Redis
 
-### Room Brute Forcing Prevention
+    Client->>Server: POST /refresh-token { refreshToken }
+    Server->>Redis: GET refresh:sha256(token)
 
-- Room IDs are UUIDs (122 bits of entropy) — guessing is computationally infeasible
-- `GET /api/user/rooms/:roomId` validates room existence — returns 404 for invalid IDs
-- Rate limiting on authenticated endpoints: 20 room validations per 15 minutes per IP
+    alt token missing (used, stolen, or expired)
+        Redis-->>Server: null
+        Server-->>Client: 401 — reuse attack detected
+    else token valid
+        Redis-->>Server: userId
+        Server->>Redis: DEL refresh:sha256(oldToken)
+        Server->>Redis: SETEX refresh:sha256(newToken) userId 2592000
+        Server-->>Client: new accessToken + refreshToken ✅
+    end
+```
 
 ### Rate Limiting
 
-`express-rate-limit` with Redis store (survives restarts, shared across instances):
+`express-rate-limit` with Redis store — survives restarts, shared across instances:
 
 | Endpoint | Window | Limit | Purpose |
 |---|---|---|---|
@@ -556,22 +554,7 @@ Canvas strokes are `{x, y}` coordinate arrays and CSS color strings. They are re
 
 `app.set("trust proxy", 1)` ensures real client IP is used behind Railway's reverse proxy.
 
-### Environment Secrets
-
-All secrets are environment variables — never committed to source. `.env.example` documents variable names with no values. Railway injects secrets at runtime. Docker Compose reads from `.env` via `${VAR}` syntax.
-
-```
-ACCESS_TOKEN_SECRET     # 64-char random hex
-REFRESH_TOKEN_SECRET    # 64-char random hex
-VERIFICATION_SECRET     # 64-char random hex
-BREVO_API_KEY           # email provider key
-MONGO_URI               # connection string with embedded credentials
-REDIS_URL               # redis://user:pass@host:port
-```
-
 ### WebSocket Event Validation
-
-Every incoming event is routed through a typed handler map:
 
 ```typescript
 const handlers: Record<string, Handler> = {
@@ -587,25 +570,15 @@ const handler = handlers[message.type];
 if (!handler) return; // unknown event type silently dropped
 ```
 
-Server-side enforcement: `userId` and `username` are read from `socket.userId` / `socket.username` (set at auth time) — not from the client payload.
+`userId` and `username` are always read from `socket.userId` / `socket.username` (set at auth time) — never from client payload.
 
-### Oversized Payload Protection
+### XSS Prevention
 
-The `ws` library has a default `maxPayload` of 100MB. For this use case (strokes and cursor positions), payloads should never exceed a few KB. A hardened production deployment would set:
-
-```typescript
-const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 }); // 64KB max
-```
-
-### DDoS Mitigation
-
-Current: Railway's infrastructure provides basic DDoS protection at the network layer. Rate limiting prevents application-layer abuse.
-
-Production hardening would add: Cloudflare in front of the backend (WAF + DDoS), connection limits per IP at the WebSocket level, and per-connection message rate limits tracked in Redis.
+Canvas strokes are `{x, y}` coordinate arrays rendered via Canvas API (`ctx.lineTo`, `ctx.stroke`) — **never injected into the DOM**. Usernames rendered via React JSX which escapes all HTML entities. No `dangerouslySetInnerHTML` anywhere.
 
 ### Replay Attack Prevention
 
-Refresh tokens rotate on every use — each token is single-use. If an attacker intercepts and uses a refresh token before the legitimate user, the legitimate user's next refresh will find the old token missing and receive a 401. The attack is detected. Access tokens are short-lived (15 minutes) — replay window is bounded.
+Refresh tokens rotate on every use — each token is single-use. If a stolen token is used before the legitimate user, the legitimate user's next refresh finds the old token missing and receives 401. Access tokens are short-lived (15 minutes) — replay window is bounded.
 
 ---
 
@@ -623,69 +596,70 @@ Refresh tokens rotate on every use — each token is single-use. If an attacker 
 | Users (identity) | MongoDB | Permanent, needs query by email |
 | Room metadata | MongoDB | TTL index for auto-expiry |
 
-### Behavior During Deployment Restart
+### Deployment Restart Flow
 
-1. Railway sends SIGTERM → graceful shutdown handler fires
-2. Server stops accepting new connections, existing connections drain (10s window)
-3. All Redis state is intact — room membership, strokes, tokens
-4. New instance starts, reconnects to Redis and MongoDB
-5. WebSocket clients detect disconnect → reconnect automatically
-6. Clients send `JOIN_ROOM` → receive `INITIAL_STATE` → resume drawing
-7. **No data lost. No user action required.**
+```mermaid
+sequenceDiagram
+    participant Railway
+    participant Server
+    participant Redis
+    participant Client
+
+    Railway->>Server: SIGTERM
+    Server->>Server: stop accepting new connections
+    Server->>Server: drain existing (10s window)
+    Server->>Server: process.exit(0)
+
+    Railway->>Server: start new instance
+    Server->>Redis: reconnect — all state intact
+
+    Client->>Client: detects close event
+    Client->>Server: reconnect + JOIN_ROOM
+    Server->>Redis: LRANGE strokes 0 -1
+    Server-->>Client: INITIAL_STATE
+    Note over Client: resumes drawing — no data lost ✅
+```
 
 ### Eventual vs Strict Consistency
 
-**Eventual consistency** — chosen deliberately. The RPUSH → PUBLISH sequence is two separate Redis operations. Between them, a new joiner could receive `INITIAL_STATE` without the in-flight stroke — but will receive it within milliseconds when the stroke is published. For a collaborative drawing tool, this sub-millisecond inconsistency window is imperceptible.
-
-### Split-Brain Prevention
-
-With Redis as the single source of truth, split-brain is prevented at the data layer. If a network partition isolates Instance A from Redis, Instance A cannot read or write room state — it effectively stops functioning. This is a partition-intolerant design at the Redis layer, trading availability for consistency of the state store. The canvas itself (what users see) is AP — instances continue broadcasting locally even if Redis is unreachable.
+**Eventual consistency** — chosen deliberately. The `RPUSH → PUBLISH` sequence is two separate Redis operations. A new joiner between them could receive `INITIAL_STATE` without the in-flight stroke — but will receive it within milliseconds via pub/sub. For a collaborative drawing tool, this window is imperceptible.
 
 ---
 
 ## 9. Reliability & Fault Tolerance
 
-### Redis Goes Down
+### Failure Scenarios
 
-- `JOIN_ROOM` fails — new users cannot enter rooms
-- `CANVAS_UPDATE` fails silently — strokes not persisted or broadcast cross-instance
-- Rate limiting fails open — requests pass through
-- Refresh tokens cannot be validated — logged-out users cannot refresh
-- Health endpoint returns 503 → Railway restarts instance
-- **Recovery:** Redis restart restores all persisted data (if RDB/AOF enabled); pub/sub channels reconnect automatically
+```mermaid
+flowchart TD
+    subgraph RD["Redis Down"]
+        R1["JOIN_ROOM fails"]
+        R2["Strokes not persisted or broadcast"]
+        R3["Rate limiting fails open"]
+        R4["Health → 503 → Railway restarts"]
+    end
 
-### MongoDB Goes Down
+    subgraph MD["MongoDB Down"]
+        M1["Signin / Signup fails"]
+        M2["JOIN_ROOM room validation fails"]
+        M3["Existing WS connections unaffected ✅"]
+        M4["Health → 503 → Railway restarts"]
+    end
 
-- Signup, signin, verify-otp fail — new auth impossible
-- `JOIN_ROOM` validation fails — room lookup returns error
-- Existing WebSocket connections are **unaffected** — they don't query MongoDB during drawing
-- Health endpoint returns 503 → Railway restarts instance
-
-### One Instance Crashes
-
-- Clients connected to that instance lose their WebSocket connection
-- `close` event may not fire cleanly — heartbeat on remaining instances eventually cleans up Redis membership
-- Clients reconnect to another instance (load balancer round-robins)
-- `JOIN_ROOM` → `INITIAL_STATE` from Redis → drawing resumes
-- No data lost
-
-### WebSocket Connection Rehydration
-
-On reconnect, `useRoomSocket` automatically:
-1. Creates new WebSocket with fresh JWT
-2. Sends `JOIN_ROOM` with the current `roomId`
-3. Receives `INITIAL_STATE` → canvas replays
-4. User is back in the room within 2–3 seconds
-
-### Backpressure Handling
-
-Node.js streams have built-in backpressure. The `ws` library respects `socket.bufferedAmount` — if a client's send buffer is full, messages queue. Currently no explicit backpressure handling beyond this. At high message rates, slow clients could accumulate large buffers — production hardening would drop messages for lagging clients after a threshold.
+    subgraph IC["Instance Crash"]
+        C1["Clients detect close event"]
+        C2["Reconnect to another instance"]
+        C3["JOIN_ROOM → INITIAL_STATE from Redis"]
+        C4["No data lost ✅"]
+        C1 --> C2 --> C3 --> C4
+    end
+```
 
 ### Event Storm Prevention
 
-- Cursor events throttled at the source: 50ms minimum interval in `useRoomSocket`
+- Cursor events throttled at source: 50ms minimum interval in `useRoomSocket`
 - Rate limiting prevents HTTP endpoint storms
-- WebSocket message types are validated — invalid types dropped without processing
+- WebSocket message types validated — invalid types dropped without processing
 - Redis pub/sub naturally rate-limits: PUBLISH is synchronous, slow consumers don't block producers
 
 ---
@@ -708,39 +682,31 @@ src/
 └── index.ts                # Composition root: wire everything together
 ```
 
-### Where Does Validation Live?
+### Dependency Direction
 
-- **HTTP inputs:** `express-rate-limit` at route level, body destructuring in controllers
-- **WebSocket inputs:** event router's handler map (unknown types dropped), TypeScript interfaces
-- **Auth validation:** `verifyAccessToken` in middleware, called before any authenticated route
+```mermaid
+flowchart LR
+    Routes["src/routes/\nHTTP transport"] --> API
+    WS["src/websocket/\nWS event router"] --> API
+    API["src/api/ + modules/\nBusiness logic\nno Express · no Redis"] --> Utils
+    Utils["src/utils/\nRedis client\nMongoDB client\nJWT helpers"]
+```
 
-### Where Does Business Logic Live?
+- `src/websocket/` has zero Express imports
+- `src/routes/` has zero WebSocket imports
+- Business logic in `src/api/` has zero transport imports
 
-`src/api/` and `src/modules/*/service.ts` — no Redis or Express imports. Pure functions that take data and return results.
+### Redis Client Abstraction
 
-### Where Does Transport Logic Live?
-
-`src/routes/` (HTTP) and `src/websocket/ws.router.ts` (WebSocket). These files orchestrate: validate input → call business logic → write to Redis → publish event → send response.
-
-### Is WebSocket Logic Isolated From HTTP?
-
-Yes. `src/websocket/` has no Express imports. `src/routes/` has no WebSocket imports. They share only utility modules (Redis client, JWT). The WebSocket server is initialized once in `index.ts` by passing the HTTP server reference.
-
-### Is the Redis Client Abstracted?
-
-Two dedicated Redis clients:
+Two dedicated Redis clients exported from `src/utils/redis/redisClient.ts`:
 - `redisPublisher` — for all WRITE operations (RPUSH, PUBLISH, SADD, etc.)
 - `redisSubscriber` — dedicated to PSUBSCRIBE (cannot run other commands while subscribed)
 
-Both exported from `src/utils/redis/redisClient.ts`. No direct `ioredis` imports in business logic.
+No direct `ioredis` imports in business logic.
 
 ---
 
 ## 11. Infrastructure Readiness
-
-### Can This System Scale Horizontally?
-
-Yes. The only instance-local state is the `connections` Map. Redis handles all coordination. Add instances behind a load balancer with no configuration changes.
 
 ### Scaling to 10,000 Concurrent Users
 
@@ -752,51 +718,51 @@ Yes. The only instance-local state is the `connections` Map. Redis handles all c
 | Node.js event loop | CPU-bound at very high msg rates | Cluster mode (multiple processes per machine) |
 | WebSocket connections | ~65k per instance (OS socket limit) | Multiple instances behind load balancer |
 
+### At 100k DAU — What Breaks First
+
+```mermaid
+flowchart TD
+    DAU["100k DAU → ~10k concurrent"]
+    DAU --> Calc["200 active rooms × 1,100 msg/s\n= 220,000 msg/s"]
+    Calc --> Limit["Single Redis instance limit\n~100k msg/s ❌ BOTTLENECK"]
+    Limit --> Fix1["Redis Cluster\nhash-tag channel affinity"]
+    Limit --> Fix2["roomConnections index\nO room_size broadcast"]
+    Limit --> Fix3["Canvas snapshotting\nevery 500 strokes → S3"]
+```
+
+### What to Move to Managed Infrastructure
+
+| Component | Current | At Scale |
+|---|---|---|
+| Redis | Railway Redis | AWS ElastiCache (Redis Cluster mode) |
+| MongoDB | Atlas Free | Atlas Dedicated M30+ with read replicas |
+| WebSocket servers | Railway | AWS ECS Fargate (auto-scaling) |
+| Load balancer | Railway (built-in) | AWS ALB with WebSocket support |
+| Static frontend | Railway Caddy | CloudFront + S3 |
+| Email | Brevo | AWS SES ($0.10/1000 emails) |
+
+**Total infrastructure cost at 100k DAU:** ~$500–800/month on AWS. Recoverable from ~200 premium subscribers at $5/month.
+
 ### Metrics to Monitor
 
-| Metric | Alert Threshold | Tool |
-|---|---|---|
-| Redis memory usage | >80% of allocated | Railway metrics |
-| Redis pub/sub lag | >100ms | Custom gauge |
-| WebSocket connection count | >50k per instance | Custom gauge |
-| HTTP p99 latency | >500ms | Railway / Datadog |
-| `INITIAL_STATE` payload size | >10MB | Custom histogram |
-| Reconnect rate | >5% per minute | Custom counter |
-| Rate limit hits | >100/min | express-rate-limit counter |
-
-### Critical Logs
-
-```
-[WS] Connected: {connectionId} ({username})
-[WS] {username} joined room {roomId} — {n} online
-[WS] Dead connection detected: {connectionId} — terminating
-[WS] Cleaned up: {connectionId} — {n} remaining in {roomId}
-[Shutdown] SIGTERM received — closing gracefully
-```
-
-### Load Balancing & Sticky Sessions
-
-**Sticky sessions are not required** because all session state is in Redis. A round-robin load balancer works. WebSocket connections naturally stick to one instance for their duration (TCP-level stickiness), but reconnects can land on any instance without issue.
+| Metric | Alert Threshold |
+|---|---|
+| Redis memory usage | >80% of allocated |
+| Redis pub/sub lag | >100ms |
+| WebSocket connection count | >50k per instance |
+| HTTP p99 latency | >500ms |
+| `INITIAL_STATE` payload size | >10MB |
+| Reconnect rate | >5% per minute |
 
 ---
 
 ## 12. Performance
 
-### Current Bottleneck
-
-Redis pub/sub throughput on a single instance (~100k messages/second). At 50 users per room, each moving their cursor at 20 events/second = 1,000 events/room/second. At 100 concurrent active rooms = 100,000 events/second — approaching the limit.
-
-**Second bottleneck:** `INITIAL_STATE` payload for rooms with thousands of strokes. One `LRANGE 0 -1` on 10,000 strokes is a ~5MB Redis read and ~5MB network transfer.
-
 ### Messages Per Second — One Room
 
-50 users × 20 cursor events/s = 1,000 pub/sub messages/s per room  
-50 users × 2 strokes/s = 100 additional messages/s  
+50 users × 20 cursor events/s = 1,000 pub/sub messages/s per room
+50 users × 2 strokes/s = 100 additional messages/s
 **Total: ~1,100 messages/second per active room**
-
-### Broadcasting Cost — N Users
-
-`broadcastToRoom` iterates all local connections filtering by `currentRoom`. Cost: O(total_connections) per room event. At 10,000 total connections and 50 per room, that's 10,000 iterations to find 50 recipients. **Fix:** maintain a `roomConnections: Map<roomId, Set<connectionId>>` index for O(room_size) broadcast instead of O(total_connections).
 
 ### Memory Footprint Per Room
 
@@ -809,9 +775,11 @@ Redis pub/sub throughput on a single instance (~100k messages/second). At 50 use
 
 1,000 rooms = ~553MB Redis + ~50MB Node.js heap. Well within Railway's 8GB Redis limit.
 
-### Redis Pub/Sub Scalability
+### Broadcasting Cost
 
-Single Redis instance: ~100k messages/s. Redis Cluster: linearly scalable by adding shards, with the constraint that all subscribers to a channel must be on the same shard (enforce via hash tags: `room:{roomId}` → hash slot determined by `roomId`).
+`broadcastToRoom` currently iterates all local connections filtering by `currentRoom`. Cost: O(total_connections) per room event.
+
+**Fix:** maintain a `roomConnections: Map<roomId, Set<connectionId>>` index → O(room_size) broadcast instead of O(total_connections).
 
 ---
 
@@ -824,52 +792,30 @@ Add `isPrivate: boolean` and `password: string` (bcrypt-hashed) to room schema. 
 ### Adding Persistent Rooms
 
 1. Add `Board` model: `{ ownerId, title, createdAt }` — no `expiresAt`
-2. On room creation, optionally link to Board
-3. Move stroke storage: Redis List → MongoDB collection with `boardId` index
-4. Keep Redis as write-through cache for active boards
-5. `GET /api/user/boards` returns board list
-6. This is the **premium feature** — free tier keeps 24h ephemeral rooms
-
-### Adding File Attachments
-
-Upload to S3/R2 via presigned URL (client → S3 directly, no server proxy). Store S3 key in stroke payload as type `IMAGE`. Canvas renders `drawImage()` from URL. Add `Content-Type` validation and file size limits at the presigned URL generation step.
+2. Move stroke storage: Redis List → MongoDB collection with `boardId` index
+3. Keep Redis as write-through cache for active boards
+4. This is the **premium feature** — free tier keeps 24h ephemeral rooms
 
 ### Adding Replay Functionality
 
-Strokes already have timestamps (add `createdAt` to stroke schema). `GET /api/user/rooms/:roomId/replay` returns strokes ordered by timestamp. Frontend renders them progressively with `setTimeout` delays matching the original timing.
+Strokes already have timestamps. `GET /api/user/rooms/:roomId/replay` returns strokes ordered by timestamp. Frontend renders them progressively with `setTimeout` delays matching original timing.
 
-### Adding Room Analytics
+### Adding File Attachments
 
-Publish analytics events to a separate Redis stream (`XADD room:{id}:analytics`). Background worker reads the stream and writes to MongoDB analytics collection: stroke count, user count over time, session duration, peak concurrent users.
+Upload to S3/R2 via presigned URL (client → S3 directly, no server proxy). Store S3 key in stroke payload as type `IMAGE`. Canvas renders `drawImage()` from URL.
 
 ### Versioning the WebSocket Protocol
 
-```
-wss://api.example.com/ws?token=...&v=2
-```
-
-Server routes to handler sets by version:
 ```typescript
+// wss://api.example.com/ws?token=...&v=2
 const router = version === "2" ? routerV2 : routerV1;
 ```
 
-Maintain N-1 versions. Deprecate with 90-day notice. Clients negotiate via initial handshake message.
+Maintain N-1 versions. Deprecate with 90-day notice.
 
 ---
 
 ## 14. Tradeoffs & Alternatives
-
-### Why Redis Over In-Memory Adapter?
-
-In-memory state breaks on restart and makes horizontal scaling impossible. Redis adds ~1ms network latency per operation but provides persistence, shared state across instances, built-in TTL, pub/sub, and atomic operations. The latency is negligible compared to the WebSocket round-trip.
-
-### Why MongoDB?
-
-Users and room metadata need persistent storage with query capability (find user by email, find room by roomId, TTL index for auto-expiry). MongoDB's native TTL index eliminates the need for a cron job to clean expired rooms. The flexible schema accommodated the evolving room model without migrations.
-
-### Why Not Serverless?
-
-WebSocket connections are long-lived (minutes to hours). Serverless functions time out after 30 seconds (AWS Lambda) or 60 seconds (Vercel). There is no serverless primitive for maintaining a persistent WebSocket connection server-side. Serverless is appropriate for the REST API but not for the real-time layer.
 
 ### Why `ws` Instead of Socket.IO?
 
@@ -882,15 +828,19 @@ WebSocket connections are long-lived (minutes to hours). Serverless functions ti
 | Polling fallback | ✅ (legacy browser support) | ❌ |
 | Visibility | Opaque | Full control |
 
-Socket.IO's abstractions hide what's actually happening. Every feature it provides (rooms, broadcasting, reconnection) is implemented explicitly here with Redis — giving full control, visibility, and no hidden behavior.
+Socket.IO's abstractions hide what's actually happening. Every feature it provides (rooms, broadcasting, reconnection) is implemented explicitly here with Redis — giving full control and no hidden behavior.
 
-### Why Not a Managed Pub/Sub Service?
+### Why Not Serverless?
 
-AWS SNS, Google Pub/Sub, or Ably would add $50–200/month in costs, an external network hop on every message (~10–50ms vs <1ms for Redis), and a new dependency with its own SDK, auth, and failure modes. Redis already handles this workload at sub-millisecond latency.
+WebSocket connections are long-lived (minutes to hours). Serverless functions time out after 30 seconds (AWS Lambda) or 60 seconds (Vercel). There is no serverless primitive for a persistent WebSocket connection server-side.
 
 ### Why Not CRDTs?
 
-CRDTs (Yjs, Automerge) are designed for text collaboration where two users editing the same character position need conflict resolution. Canvas drawing is **append-only** — two users drawing simultaneously produce two independent strokes. There is no conflict. CRDTs would add ~40KB to the bundle, a complex synchronization protocol, and significant implementation complexity for zero benefit.
+CRDTs (Yjs, Automerge) are designed for text collaboration where two users editing the same character position need conflict resolution. Canvas drawing is **append-only** — two users drawing simultaneously produce two independent strokes. There is no conflict. CRDTs would add ~40KB to the bundle and significant complexity for zero benefit.
+
+### Why Not a Managed Pub/Sub Service?
+
+AWS SNS, Google Pub/Sub, or Ably would add $50–200/month in costs, an external network hop on every message (~10–50ms vs <1ms for Redis), and a new dependency with its own SDK, auth, and failure modes. Redis already handles this workload.
 
 ---
 
@@ -898,97 +848,56 @@ CRDTs (Yjs, Automerge) are designed for text collaboration where two users editi
 
 ### Is the System CP or AP Under CAP Theorem?
 
-**AP (Available + Partition Tolerant)** for the canvas layer. During a Redis network partition:
-- Each instance continues serving local WebSocket connections
-- Drawing and broadcasting continues locally
-- Cross-instance synchronization stops — instances diverge
-- On partition recovery, Redis pub/sub resumes, but diverged strokes are not reconciled
+**AP (Available + Partition Tolerant)** for the canvas layer. During a Redis network partition, each instance continues serving local WebSocket connections and broadcasting locally, but cross-instance synchronization stops. On partition recovery, pub/sub resumes but diverged strokes are not reconciled.
 
-**CP for Redis itself** — Redis (in default mode) prioritizes consistency within the Redis cluster. A minority-partition Redis node stops accepting writes.
+**CP for Redis itself** — a minority-partition Redis node stops accepting writes.
 
-### Is WebSocket Cluster State Eventually Consistent?
+### Ghost User Prevention — Three Mechanisms
 
-Yes. The sequence `RPUSH → PUBLISH` is two separate operations. A client could theoretically receive the pub/sub event before the RPUSH completes (highly unlikely — RPUSH is synchronous before PUBLISH). A late joiner between these two operations would miss the stroke in `INITIAL_STATE` but receive it via the subsequent pub/sub event. This is a sub-millisecond inconsistency window.
-
-### How Do You Prevent Ghost Users in Redis?
-
-Three mechanisms working in concert:
-
-1. **Proactive sweep on JOIN_ROOM** — iterate Redis user set, remove any `connectionId` not in local `connections` Map
-2. **Reactive cleanup on disconnect** — `close` event → `SREM` → recount → broadcast
-3. **TTL safety net** — when room empties, both Redis keys get 24h TTL; on next join, stale key is overwritten
-
-### Can Pub/Sub Cause Message Ordering Issues?
-
-Within a single Redis instance, pub/sub messages on a given channel are delivered in publication order — Redis is single-threaded. Across Redis Cluster shards, ordering is per-shard. With channel-key affinity (hash tags), all messages for `room:{roomId}` land on the same shard, preserving order.
-
-In practice at current scale (single Redis instance), ordering is always preserved.
+```mermaid
+flowchart TD
+    G1["1. Proactive sweep on JOIN_ROOM\nremove connectionId not in local Map"]
+    G2["2. Reactive cleanup on disconnect\nclose event → SREM → broadcast USER_LEFT"]
+    G3["3. TTL safety net\n24h TTL when room empties"]
+    G1 & G2 & G3 --> Result["Zero ghost users ✅"]
+```
 
 ### Idempotency Strategy
 
-- `JOIN_ROOM`: Idempotent — SADD on a Set is idempotent (duplicate adds are ignored)
-- `CANVAS_UPDATE`: Not idempotent — duplicate RPUSHes create duplicate strokes. Mitigated by `strokeId` (UUID) which allows deduplication on the client
-- `UNDO`: Idempotent — LREM removes all matching strokes; second LREM on same strokeId is a no-op
-- `LEAVE_ROOM`: Idempotent — SREM on non-existent member is a no-op
+| Event | Idempotent? | Reason |
+|---|---|---|
+| `JOIN_ROOM` | ✅ | SADD on Set ignores duplicates |
+| `CANVAS_UPDATE` | ❌ | Duplicate RPUSH = duplicate stroke (mitigated by strokeId dedup on client) |
+| `UNDO` | ✅ | LREM on same strokeId is a no-op |
+| `LEAVE_ROOM` | ✅ | SREM on non-existent member is a no-op |
 
 ### Debugging a Production Real-Time Issue
 
+```bash
+# 1. Check health
+curl https://canvas-production-671b.up.railway.app/health
+
+# 2. Query Redis directly
+SCARD room:{roomId}:users          # members Redis thinks exist
+LLEN room:{roomId}:strokes         # stroke count
+PUBSUB CHANNELS room:*             # active room channels
+PUBSUB NUMSUB room:{roomId}        # subscriber count
+
+# 3. Force-test pub/sub
+PUBLISH room:{roomId} '{"type":"TEST","payload":{}}'
+# should appear in server logs if subscriber is healthy
 ```
-1. Check health endpoint: GET /backend.railway.app/health
-2. Check Railway logs for connection/disconnection patterns
-3. Query Redis directly:
-   SCARD room:{roomId}:users          → how many members Redis thinks exist
-   LLEN room:{roomId}:strokes         → stroke count
-   PUBSUB CHANNELS room:*             → which room channels are active
-   PUBSUB NUMSUB room:{roomId}        → how many subscribers
-4. Compare Redis user count vs actual client count in browser
-5. Check for ghost connectionIds: SMEMBERS room:{roomId}:users vs connections Map
-6. Force-test pub/sub: PUBLISH room:{roomId} '{"type":"TEST","payload":{}}'
-   → should appear in server logs if subscriber is healthy
-```
 
-### What Metrics Define Success?
+### Success Metrics
 
-| Metric | Target | Meaning |
-|---|---|---|
-| Stroke sync latency (P95) | <100ms | Strokes appear near-instantly |
-| `JOIN_ROOM` to first paint | <500ms | Late join feels fast |
-| Cursor update latency | <50ms | Presence feels live |
-| Ghost user rate | <0.1% | Cleanup is working |
-| Reconnect success rate | >99% | Clients recover from drops |
-| Redis pub/sub lag | <10ms | Cross-instance sync is healthy |
-
----
-
-## 16. If This Gets 100,000 Daily Active Users Tomorrow
-
-### What Breaks First?
-
-**Redis pub/sub throughput.** 100k DAU → assume 10k concurrent peak → 200 active rooms × 1,100 msg/s = 220,000 messages/second. Single Redis instance handles ~100k/s. **Redis becomes the bottleneck.**
-
-**Second:** `broadcastToRoom` is O(total_connections) — at 10k connections, iterating all of them per event is expensive. Need `roomConnections` index.
-
-**Third:** `INITIAL_STATE` for high-stroke rooms causes Redis → Node.js → Client data transfer spikes.
-
-### What to Redesign
-
-1. **Redis Cluster** with hash-tag channel affinity: `{roomId}` as hash key → all room state on same shard
-2. **Room connection index:** `roomConnections: Map<roomId, Set<connectionId>>` → O(N) broadcast where N is room size, not total connections
-3. **Canvas snapshotting:** every 500 strokes, snapshot to S3 → reset stroke list → join fetches snapshot + delta
-4. **Horizontal WebSocket scaling:** 10+ Node.js instances, Redis Cluster as coordinator
-
-### What to Move to Managed Infrastructure
-
-| Component | Current | At Scale |
-|---|---|---|
-| Redis | Railway Redis | AWS ElastiCache (Redis Cluster mode) |
-| MongoDB | Atlas Free | Atlas Dedicated M30+ with read replicas |
-| WebSocket servers | Railway | AWS ECS Fargate (auto-scaling) |
-| Load balancer | Railway (built-in) | AWS ALB with WebSocket support |
-| Static frontend | Railway Caddy | CloudFront + S3 |
-| Email | Brevo | AWS SES (cost: $0.10/1000 emails) |
-
-**Total infrastructure cost at 100k DAU:** ~$500–800/month on AWS. Recoverable from ~200 premium subscribers at $5/month.
+| Metric | Target |
+|---|---|
+| Stroke sync latency (P95) | <100ms |
+| `JOIN_ROOM` to first paint | <500ms |
+| Cursor update latency | <50ms |
+| Ghost user rate | <0.1% |
+| Reconnect success rate | >99% |
+| Redis pub/sub lag | <10ms |
 
 ---
 
@@ -1007,10 +916,7 @@ cp .env.example .env
 # Fill in: MONGO_URI, ACCESS_TOKEN_SECRET, REFRESH_TOKEN_SECRET,
 #          VERIFICATION_SECRET, BREVO_API_KEY, BREVO_SENDER_EMAIL
 
-# Start Redis via Docker
 docker-compose up redis -d
-
-# Install and run
 npm install
 npm run dev
 ```
@@ -1020,8 +926,8 @@ npm run dev
 ```bash
 cd canvas-frontend
 cp .env.example .env
-# Set REACT_APP_API_URL=http://localhost:8080/api
-# Set REACT_APP_WS_URL=ws://localhost:8080
+# REACT_APP_API_URL=http://localhost:8080/api
+# REACT_APP_WS_URL=ws://localhost:8080
 
 nvm use 20
 npm install
@@ -1040,9 +946,6 @@ docker-compose up --build
 ```bash
 curl http://localhost:8080/health
 # {"status":"ok","uptime":5,"dependencies":{"redis":"connected","mongodb":"connected"}}
-
-curl http://localhost:8080/api-docs.json | jq '.paths | keys'
-# Lists all documented API routes
 ```
 
 ### Environment Variables
@@ -1083,8 +986,8 @@ REDIS_URL=redis://localhost:6379
 
 ```typescript
 process.on("SIGTERM", () => {
-  server.close(() => process.exit(0));        // stop accepting new connections
-  setTimeout(() => process.exit(1), 10000);  // force exit after 10s if stuck
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 10000); // force exit after 10s
 });
 ```
 
@@ -1101,8 +1004,7 @@ server/
 │   │   └── landing-page/
 │   │       ├── signin-signup.ts       # Signup, signin, OTP verify business logic
 │   │       ├── refresh.ts             # Token rotation + logout handlers
-│   │       ├── otp-generation-validation.ts
-│   │       └── verify-token.ts
+│   │       └── otp-generation-validation.ts
 │   ├── middleware/
 │   │   └── rate-limiter.ts            # express-rate-limit + Redis store config
 │   ├── modules/
@@ -1112,41 +1014,41 @@ server/
 │   │       └── room.schema.ts         # Mongoose schema + TTL index
 │   ├── routes/
 │   │   ├── general-routes.ts          # /signup /signin /verify-otp /refresh + Swagger
-│   │   ├── authenticated-routes.ts   # /rooms /me + Swagger
+│   │   ├── authenticated-routes.ts    # /rooms /me + Swagger
 │   │   └── health.routes.ts           # /health /ready
 │   ├── services/
-│   │   └── refresh-token.service.ts  # Redis token: store/validate/revoke/rotate
+│   │   └── refresh-token.service.ts   # Redis token: store/validate/revoke/rotate
 │   ├── utils/
-│   │   ├── auth/jwt.ts               # sign/verify access + refresh tokens
-│   │   ├── mongodb/mongo-client.ts   # MongoDB connection singleton
-│   │   ├── redis/redisClient.ts      # Publisher + subscriber Redis clients
-│   │   ├── swagger.ts                # swagger-jsdoc config
-│   │   └── user-colors.ts            # Deterministic color from userId hash
+│   │   ├── auth/jwt.ts                # sign/verify access + refresh tokens
+│   │   ├── mongodb/mongo-client.ts    # MongoDB connection singleton
+│   │   ├── redis/redisClient.ts       # Publisher + subscriber Redis clients
+│   │   ├── swagger.ts                 # swagger-jsdoc config
+│   │   └── user-colors.ts             # Deterministic color from userId hash
 │   ├── websocket/
-│   │   ├── socket.server.ts          # WS init, JWT auth on upgrade, heartbeat
-│   │   ├── ws.router.ts              # Event handlers: JOIN, DRAW, UNDO, CURSOR, LEAVE
-│   │   └── socket.types.ts           # SocketEvent enum, all payload TypeScript interfaces
-│   └── index.ts                      # Composition root: Express + WS + graceful shutdown
-├── Dockerfile                         # Multi-stage: builder (tsc) + production (dist only)
-├── docker-compose.yml                 # Local dev: server + Redis
-├── .env.example                       # Variable names, no values
+│   │   ├── socket.server.ts           # WS init, JWT auth on upgrade, heartbeat
+│   │   ├── ws.router.ts               # Event handlers: JOIN, DRAW, UNDO, CURSOR, LEAVE
+│   │   └── socket.types.ts            # SocketEvent enum, payload TypeScript interfaces
+│   └── index.ts                       # Composition root: Express + WS + graceful shutdown
+├── Dockerfile                          # Multi-stage: builder (tsc) + production (dist only)
+├── docker-compose.yml                  # Local dev: server + Redis
+├── .env.example
 └── .dockerignore
 
 canvas-frontend/
 ├── src/
 │   ├── components/
-│   │   └── GhostCursors.tsx           # Remote cursor overlays (pointer-events-none)
+│   │   └── GhostCursors.tsx            # Remote cursor overlays (pointer-events-none)
 │   ├── hooks/
-│   │   └── useRoomSocket.ts           # WS lifecycle, all event send/receive, reconnect
+│   │   └── useRoomSocket.ts            # WS lifecycle, all event send/receive, reconnect
 │   ├── modules/room/canvas/
-│   │   ├── Canvas.tsx                 # Drawing, undo/redo stacks, imperative DOM methods
-│   │   └── canvas.types.ts            # Stroke interface (strokeId, userId, points, color, width)
+│   │   ├── Canvas.tsx                  # Drawing, undo/redo stacks, imperative DOM methods
+│   │   └── canvas.types.ts             # Stroke interface (strokeId, userId, points, color, width)
 │   ├── pages/
-│   │   ├── room/RoomPage.tsx          # Room UI: header, canvas, cursor overlay
-│   │   └── Dashboard.tsx              # Create/join room
-│   ├── components/signin-singup/      # Auth pages + OTP verification
-│   └── lib/api.ts                     # Axios instance + auth interceptor
-├── .nvmrc                             # Node 20 pin
+│   │   ├── room/RoomPage.tsx           # Room UI: header, canvas, cursor overlay
+│   │   └── Dashboard.tsx               # Create/join room
+│   ├── components/signin-singup/       # Auth pages + OTP verification
+│   └── lib/api.ts                      # Axios instance + auth interceptor
+├── .nvmrc
 └── public/
 ```
 
@@ -1181,7 +1083,7 @@ canvas-frontend/
 
 <div align="center">
 
-Built with TypeScript, Redis, and WebSockets.  
+Built with TypeScript, Redis, and WebSockets.
 Designed for production from day one.
 
 </div>
