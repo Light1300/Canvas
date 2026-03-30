@@ -1,4 +1,6 @@
 import bcrypt from "bcrypt";
+import { createChildLogger } from "../../utils/logger/logger.js";
+const log = createChildLogger({ module: "auth" });
 import { connectDB } from "../../utils/mongodb/mongo-client.js";
 import { generateAndSendOtp, validateOtp } from "./otp-generation-validation.js";
 import { generateVerificationToken, verifyVerificationToken } from "./verify-token.js";
@@ -117,7 +119,7 @@ export const verifyOtp = async (event: any): Promise<ApiResponse> => {
       }),
     };
   } catch (error) {
-    console.error("OTP VERIFICATION ERROR:", error);
+    log.error({ err: error }, "OTP verification failed");
     return {
       success: false,
       statusCode: 500,

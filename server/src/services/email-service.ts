@@ -1,3 +1,6 @@
+import { createChildLogger } from "../utils/logger/logger.js";
+const log = createChildLogger({ module: "email" });
+
 const BREVO_API_KEY = process.env.BREVO_API_KEY as string;
 const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL as string;
 const BREVO_SENDER_NAME = "Canva Project";
@@ -36,9 +39,9 @@ export async function sendVerificationEmail(
 
   if (!response.ok) {
     const error = await response.text();
-    console.error("Brevo API error:", error);
+    log.error({ err: error }, "Brevo API error");
     throw new Error("Failed to send verification email");
   }
 
-  console.log("Email sent to:", toEmail);
+  log.info({ toEmail }, "verification email sent");
 }

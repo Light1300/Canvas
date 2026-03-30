@@ -91,7 +91,7 @@ export const createSocketRouter = ({ connections }: RouterDeps) => {
         payload: { roomId, count },
       }));
 
-      console.log(`[WS] ${socket.username} joined room ${roomId} — ${count} online`);
+      socket.log.info({ roomId, count }, "user joined room");
     },
 
     async [SocketEvent.LEAVE_ROOM](socket, message) {
@@ -123,7 +123,7 @@ export const createSocketRouter = ({ connections }: RouterDeps) => {
         payload: { roomId, count },
       }));
 
-      console.log(`[WS] ${socket.username} explicitly left room ${roomId}`);
+    socket.log.info({ roomId }, "user explicitly left room");
     },
 
     async [SocketEvent.CANVAS_UPDATE](_socket, message) {

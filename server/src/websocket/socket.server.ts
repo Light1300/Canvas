@@ -9,6 +9,7 @@ import { SocketEvent, SocketMessage } from "./socket.types.js";
 import { getUserColor } from "../utils/user-colors.js";
 import jwt from "jsonwebtoken";
 import { parse } from "url";
+import { createChildLogger } from "../utils/logger/logger.js";
 
 const connections = new Map<string, ExtendedWebSocket>();
 
@@ -89,7 +90,8 @@ export const initWebSocketServer = (server: Server) => {
     socket.color = getUserColor(user.userId);
 
     connections.set(socket.connectionId, socket);
-    console.log(`[WS] Connected: ${socket.connectionId} (${socket.username})`);
+    socket.log = createChildLogger({ module: "websocket", connectionId: socket.connectionId, userId: socket.userId });
+    socket.log.info({ username: socket.username }, "WS client connected");
 
     socket.on("pong", () => { socket.isAlive = true; });
     socket.on("message", async (data: Buffer) => { await handleMessage(socket, data); });

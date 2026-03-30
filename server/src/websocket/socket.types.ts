@@ -1,4 +1,5 @@
 import type { WebSocket } from "ws";
+import type { Logger } from "pino";
 
 export enum SocketEvent {
   JOIN_ROOM = "JOIN_ROOM",
@@ -84,5 +85,6 @@ export interface ExtendedWebSocket extends WebSocket {
   currentRoom: string | null;
   userId: string;
   username: string;
-  color: string;        
+  color: string;
+  log: Logger;
 }
